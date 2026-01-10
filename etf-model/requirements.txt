@@ -1,0 +1,29 @@
+# ETF Stock Prediction Competition - Dependencies
+# Python >= 3.10
+
+# Core Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Machine Learning
+lightgbm>=4.0.0
+scikit-learn>=1.3.0
+optuna>=3.0.0
+
+# TabPFN (Transformer-based tabular prediction)
+tabpfn>=0.1.10
+torch>=2.0.0  # For MPS support on Apple Silicon
+
+# Technical Analysis (Pure Python - no C dependencies)
+ta>=0.10.0
+
+# Data Source
+finance-datareader>=0.9.0
+
+# Utilities
+tqdm>=4.65.0
+joblib>=1.3.0
+
+# Jupyter Notebook
+jupyter>=1.0.0
+ipykernel>=6.0.0

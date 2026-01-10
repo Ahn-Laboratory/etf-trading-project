@@ -1,0 +1,6 @@
+{
+  "enabledPlugins": {
+    "agent-orchestration@claude-code-workflows": true,
+    "machine-learning-ops@claude-code-workflows": true
+  }
+}
