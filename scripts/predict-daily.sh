@@ -6,9 +6,9 @@
 export PATH="/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$PATH"
 export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 
-LOG_DIR="/Users/jeong-uchang/etf-trading-project/logs"
+LOG_DIR="/home/ahnbi2/etf-trading-project/logs"
 LOG_FILE="$LOG_DIR/predict-$(date +%Y%m%d).log"
-PROJECT_DIR="/Users/jeong-uchang/etf-trading-project"
+PROJECT_DIR="/home/ahnbi2/etf-trading-project"
 
 mkdir -p "$LOG_DIR"
 
@@ -37,7 +37,7 @@ fi
 
 # 2. 헬스체크
 for i in {1..30}; do
-    if curl -s http://localhost:8000/health | grep -q "healthy"; then
+    if wget -q -O- http://localhost:8000/health | grep -q "healthy"; then
         echo "✅ 서비스 정상" >> "$LOG_FILE"
         break
     fi
@@ -46,9 +46,9 @@ done
 
 # 3. 전체 종목 예측 실행 (최대 101개)
 echo "🚀 예측 실행 중..." >> "$LOG_FILE"
-RESULT=$(curl -s -X POST "http://localhost:8000/api/predictions/batch" \
-    -H "Content-Type: application/json" \
-    -d '{"limit": 101}')
+RESULT=$(wget -q -O- --header="Content-Type: application/json" \
+    --post-data='{"limit": 101}' \
+    "http://localhost:8000/api/predictions/batch")
 
 # 결과 파싱
 SUCCESS=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('success', 0))" 2>/dev/null)

@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowDown, ArrowUp, PieChart, Plus, TrendingDown, TrendingUp } from "lucide-react"
+import { ArrowDown, ArrowUp, Plus, TrendingDown, TrendingUp } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,14 +12,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { portfolio, predictions, summary } from "@/lib/data"
+import { portfolio, predictions } from "@/lib/data"
 import {
   ChartConfig,
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart"
-import { Pie, PieChart as RechartsPie, Cell, Legend, ResponsiveContainer } from "recharts"
+import { Pie, PieChart as RechartsPie, Cell } from "recharts"
 
 const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#8884d8"]
 
@@ -192,12 +192,12 @@ export default function PortfolioPage() {
                             <Badge
                               variant={
                                 prediction.signal === "BUY" ? "default" :
-                                prediction.signal === "SELL" ? "destructive" : "secondary"
+                                  prediction.signal === "SELL" ? "destructive" : "secondary"
                               }
                               className={`text-xs ${prediction.signal === "BUY" ? "bg-green-600" : ""}`}
                             >
                               {prediction.signal === "BUY" ? "매수" :
-                               prediction.signal === "SELL" ? "매도" : "관망"}
+                                prediction.signal === "SELL" ? "매도" : "관망"}
                             </Badge>
                           )}
                         </div>
@@ -209,9 +209,8 @@ export default function PortfolioPage() {
                         ${item.totalValue.toLocaleString()}
                       </TableCell>
                       <TableCell className="text-right">
-                        <div className={`flex items-center justify-end gap-1 ${
-                          item.profit >= 0 ? "text-green-600" : "text-red-600"
-                        }`}>
+                        <div className={`flex items-center justify-end gap-1 ${item.profit >= 0 ? "text-green-600" : "text-red-600"
+                          }`}>
                           {item.profit >= 0 ? (
                             <ArrowUp className="h-3 w-3" />
                           ) : (

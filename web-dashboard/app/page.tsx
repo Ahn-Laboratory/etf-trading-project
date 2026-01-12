@@ -18,7 +18,7 @@ import { Area, AreaChart, XAxis, YAxis } from "recharts"
 const chartConfig = {
   portfolioValue: {
     label: "포트폴리오 가치",
-    color: "hsl(var(--chart-1))",
+    color: "var(--chart-1)",
   },
 } satisfies ChartConfig
 
@@ -81,7 +81,7 @@ export default function DashboardPage() {
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className="text-2xl font-bold text-[var(--chart-1)]">
               ${summary.totalValue.toLocaleString()}
             </div>
             <p className="text-xs text-muted-foreground">
@@ -204,7 +204,7 @@ export default function DashboardPage() {
                       <Badge
                         variant={
                           prediction.signal === "BUY" ? "default" :
-                          prediction.signal === "SELL" ? "destructive" : "secondary"
+                            prediction.signal === "SELL" ? "destructive" : "secondary"
                         }
                         className={prediction.signal === "BUY" ? "bg-green-600" : ""}
                       >

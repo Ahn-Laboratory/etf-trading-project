@@ -12,7 +12,6 @@ interface PDFDownloadButtonProps {
 
 export function PDFDownloadButton({ data, symbol }: PDFDownloadButtonProps) {
   const [isClient, setIsClient] = useState(false)
-  const [isGenerating, setIsGenerating] = useState(false)
   const [PDFComponents, setPDFComponents] = useState<{
     PDFDownloadLink: React.ComponentType<{
       document: React.ReactElement

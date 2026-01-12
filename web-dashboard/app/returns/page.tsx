@@ -1,8 +1,7 @@
 "use client"
 
-import { ArrowDown, ArrowUp, Calendar, TrendingUp, TrendingDown } from "lucide-react"
+import { ArrowDown, ArrowUp, TrendingUp, TrendingDown } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import {
   Table,
   TableBody,
@@ -24,7 +23,7 @@ import { Area, AreaChart, Bar, BarChart, Line, LineChart, XAxis, YAxis, Cartesia
 const chartConfig = {
   portfolioValue: {
     label: "포트폴리오 가치",
-    color: "hsl(var(--chart-1))",
+    color: "var(--chart-1)",
   },
   dailyReturn: {
     label: "일일 수익률",
@@ -40,7 +39,6 @@ export default function ReturnsPage() {
   const latestReturn = returns[returns.length - 1]
   const previousReturn = returns[returns.length - 2]
 
-  const weeklyReturns = returns.slice(-7)
   const monthlyReturns = returns
 
   const avgDailyReturn = returns.reduce((sum, r) => sum + r.dailyReturn, 0) / returns.length
@@ -280,9 +278,8 @@ export default function ReturnsPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-right">
-                    <div className={`flex items-center justify-end gap-1 ${
-                      item.profitPercent >= 0 ? "text-green-600" : "text-red-600"
-                    }`}>
+                    <div className={`flex items-center justify-end gap-1 ${item.profitPercent >= 0 ? "text-green-600" : "text-red-600"
+                      }`}>
                       {item.profitPercent >= 0 ? (
                         <ArrowUp className="h-3 w-3" />
                       ) : (

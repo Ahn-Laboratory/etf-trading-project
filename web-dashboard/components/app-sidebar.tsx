@@ -3,12 +3,10 @@
 import Image from "next/image"
 
 import {
-  BarChart3,
   Briefcase,
   FileText,
   Home,
   LineChart,
-  Settings,
   TrendingUp,
 } from "lucide-react"
 import Link from "next/link"

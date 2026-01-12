@@ -1,4 +1,8 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+// API URL 설정
+// Nginx를 통해 같은 도메인으로 요청하므로 상대 경로 사용 (CORS 문제 해결)
+const API_BASE_URL = typeof window !== 'undefined'
+  ? '' // 브라우저에서 실행: 상대 경로 사용 (Nginx를 통해 라우팅)
+  : (process.env.NEXT_PUBLIC_API_URL || 'http://ml-service:8000') // 서버 사이드: 내부 네트워크 사용
 
 // API 예측 결과 타입 (FastAPI 응답 형식)
 export interface APIPrediction {
@@ -112,7 +116,7 @@ export async function checkHealth(): Promise<{
       cache: "no-store",
     })
     return response.json()
-  } catch (error) {
+  } catch {
     return {
       status: "error",
       remote_db: "unknown",

@@ -4,19 +4,14 @@ services:
       context: ./ml-service
       dockerfile: Dockerfile
     container_name: etf-ml-service
-    expose:
-      - "8000"
+    network_mode: "host"
     environment:
-      - REMOTE_DB_URL=mysql+pymysql://ahnbi2:bigdata@host.docker.internal:3306/etf2_db
+      - REMOTE_DB_URL=mysql+pymysql://ahnbi2:bigdata@127.0.0.1:3306/etf2_db
       - LOCAL_DB_PATH=/app/data/predictions.db
       - LOG_LEVEL=INFO
     volumes:
       - ./data:/app/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     restart: unless-stopped
-    networks:
-      - etf-network
 
   web-dashboard:
     build:
@@ -27,10 +22,13 @@ services:
       - "3000"
     environment:
       - NODE_ENV=production
-      # Nginx를 통한 API 접근
-      - NEXT_PUBLIC_API_URL=http://ahnbi2.suwon.ac.kr
+      # Nginx를 통한 API 접근 (상대 경로 사용으로 변경 예정)
+      # 빌드 타임에 설정되므로 빈 문자열로 설정 (상대 경로 사용)
+      - NEXT_PUBLIC_API_URL=http://host.docker.internal:8000
     depends_on:
       - ml-service
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
       - etf-network
@@ -45,6 +43,8 @@ services:
     depends_on:
       - web-dashboard
       - ml-service
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
       - etf-network
