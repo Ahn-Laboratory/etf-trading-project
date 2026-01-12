@@ -45,9 +45,21 @@ if ! docker ps >/dev/null 2>&1; then
 fi
 
 # 1. SSH 터널 시작 (이미 있으면 스킵)
+# OS에 따라 바인딩 주소 결정
+OS_NAME=$(uname)
+if [ "$OS_NAME" = "Darwin" ]; then
+    # macOS: Docker Desktop이 호스트의 localhost 포워딩을 처리하므로 127.0.0.1 사용
+    BIND_ADDRESS="127.0.0.1"
+    echo "🍎 macOS 감지: SSH 터널을 localhost($BIND_ADDRESS)에 바인딩"
+else
+    # Linux: Docker 컨테이너가 host.docker.internal로 접근하려면 호스트 IP(혹은 0.0.0.0)에 바인딩 필요
+    BIND_ADDRESS="0.0.0.0"
+    echo "🐧 Linux 감지: SSH 터널을 모든 인터페이스($BIND_ADDRESS)에 바인딩"
+fi
+
 if ! pgrep -f "ssh.*3306:127.0.0.1:5100" > /dev/null; then
     echo "📡 SSH 터널 시작 중..."
-    ssh -f -N -L 3306:127.0.0.1:5100 ahnbi2@ahnbi2.suwon.ac.kr \
+    ssh -f -N -L ${BIND_ADDRESS}:3306:127.0.0.1:5100 ahnbi2@ahnbi2.suwon.ac.kr \
         -o ServerAliveInterval=60 \
         -o ServerAliveCountMax=3
     sleep 2

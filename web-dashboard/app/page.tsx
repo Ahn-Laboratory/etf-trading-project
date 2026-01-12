@@ -158,7 +158,7 @@ export default function DashboardPage() {
       {/* 메뉴 개요 섹션 */}
       <div>
         <h3 className="text-lg font-semibold mb-3">메뉴 개요</h3>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        {/* <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <Link href="/predictions">
             <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -214,7 +214,7 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           </Link>
-        </div>
+        </div> */}
       </div>
 
       {/* Snowballing AI ETF 요약 */}
