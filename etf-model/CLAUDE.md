@@ -4,13 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ETF 주식 예측 AI 경진대회 프로젝트. 2020~2024년 각 거래일에 대해 3개월 후 수익률 Top-100 종목을 예측하는 LightGBM 기반 모델.
+ETF 주식 예측 AI 경진대회 프로젝트. 2020~2024년 각 거래일에 대해 3개월 후 수익률 Top-100 종목을 예측하는 모델.
 
 **대회 규칙:**
 - 5개 연도(2020-2024) 평균 점수로 순위 산정
 - 단일 모델(단일 파이프라인) 사용 필수 - 동일한 전처리, 입력 구조, 모델 구조
-- 연도별 재학습 허용 (예: 2022년 예측 시 2021년까지 데이터로 학습)
-- 마감: 2026년 1월 8일
+- **연도별 재학습만 허용** (날짜별 재학습 금지)
+  - 2020년 예측: 2019년까지 데이터로 1번 학습 → 2020년 전체 예측
+  - 2021년 예측: 2020년까지 데이터로 1번 학습 → 2021년 전체 예측
+  - (각 연도마다 1개 모델만 사용)
+
+## Current Best Results
+
+| 모델 | 2020 | 2021 | 2022 | 2023 | 2024 | 평균 |
+|------|------|------|------|------|------|------|
+| LambdaRank | 0.168 | 0.113 | 0.112 | 0.135 | 0.168 | 0.139 |
+| **TabPFN V2 (150 features)** | 0.163 | 0.151 | 0.154 | 0.190 | 0.185 | **0.169** |
 
 ## Build & Run Commands
 
@@ -21,35 +30,52 @@ source .venv/bin/activate
 # 의존성 설치
 pip install -r requirements.txt
 
-# 전체 파이프라인 실행 (5개 연도 예측 생성)
+# LightGBM 파이프라인 실행
 python -m src.pipeline
 
-# Jupyter 노트북 실행
-jupyter notebook notebooks/train_and_submit.ipynb
+# TabPFN V2 실행 (권장)
+python -m src.tabpfn_pipeline_v2 --device cuda --features 150 --samples 10000 --chunk-size 500
+
+# 멀티 GPU 실행 (RTX 3090 x2)
+python -m src.tabpfn_pipeline_v2 --multi-gpu --gpu-ids 0 1 --features 150
 ```
+
+### TabPFN V2 주요 옵션
+| 옵션 | 기본값 | 설명 |
+|------|--------|------|
+| `--features` | 100 | 사용할 피처 수 (최대 242개) |
+| `--samples` | 10000 | 학습 샘플 수 |
+| `--chunk-size` | 500 | 예측 청크 크기 (OOM 시 줄이기) |
+| `--train-years` | 5 | 학습 데이터 기간 |
+| `--timestamp` | auto | 제출 파일명 타임스탬프 |
 
 ## Architecture
 
 ```
 src/
-├── config.py           # 전체 설정 (데이터, 피처, 모델 하이퍼파라미터)
-├── pipeline.py         # 메인 파이프라인 (CompetitionPipeline 클래스)
+├── config.py               # 전체 설정 (데이터, 피처, 모델 하이퍼파라미터)
+├── pipeline.py             # LightGBM 파이프라인
+├── tabpfn_pipeline_v2.py   # TabPFN V2 파이프라인 (규칙 준수, 권장)
 ├── data/
-│   ├── loader.py       # FinanceDataReader로 시세 다운로드
-│   └── preprocessor.py # 전처리, 메모리 최적화
+│   ├── loader.py           # FinanceDataReader로 시세 다운로드
+│   └── preprocessor.py     # 전처리, 메모리 최적화
 ├── features/
-│   ├── technical.py    # RSI, MACD, Stochastic, ADX, Aroon
-│   ├── momentum.py     # ROC, 이동평균 비율
-│   ├── volatility.py   # ATR, Bollinger Bands, 변동성
-│   ├── volume.py       # 거래량 비율, OBV, MFI
-│   ├── returns.py      # 다기간 수익률 (1d~252d), 타겟 생성
-│   └── cross_sectional.py  # 일별 종목 간 랭킹 피처
+│   ├── technical.py        # RSI, MACD, Stochastic, ADX, Aroon (15개)
+│   ├── momentum.py         # ROC, 이동평균 비율 (27개)
+│   ├── volatility.py       # ATR, Bollinger Bands (23개)
+│   ├── volume.py           # 거래량 비율, OBV, MFI (23개)
+│   ├── returns.py          # 다기간 수익률 (38개)
+│   ├── cross_sectional.py  # 일별 종목 간 랭킹 (35개)
+│   └── enhanced.py         # 추가 피처 (81개)
 ├── models/
-│   ├── lightgbm_model.py   # ETFRankingModel (예측 및 Top-K 선택)
-│   └── trainer.py          # WalkForwardTrainer (워크포워드 학습)
+│   ├── lightgbm_model.py   # ETFRankingModel
+│   ├── tabpfn_model.py     # TabPFNRankingModel
+│   └── trainer.py          # WalkForwardTrainer
 └── utils/
     └── evaluation.py       # 정확도 계산, 제출 파일 검증
 ```
+
+**총 피처 수: 242개** (correlation 기준 상위 N개 선택)
 
 **데이터 흐름:**
 1. `DataLoader`: FinanceDataReader로 OHLCV 다운로드 → 종목별 DataFrame
@@ -90,5 +116,19 @@ src/
 - **미래 정보 누수 금지**: 예측일 이후 데이터 사용 시 무효
 - **유니버스 준수**: 연도별 지정된 티커만 예측 가능
 
+## Server Info
+
+```bash
+# 서버 접속
+ssh ahnbi1.suwon.ac.kr
+
+# 프로젝트 경로
+cd /data2/project/2025summer/jwc0706/etf-trading-project/etf-model
+
+# GPU: RTX 3090 x2
+```
+
 ## 규칙
-1) 긴 시간이 걸리는 작업은 기다리지말고 nohup 으로 백그라운드에서 실행시키고 logs/ 폴더에 로그 기록
+1) 긴 시간이 걸리는 작업은 nohup으로 백그라운드 실행, logs/ 폴더에 로그 기록
+2) TabPFN V1 (날짜별 학습)은 규칙 위반 - V2 (연도별 학습) 사용
+3) 제출 파일명: `{year}.tabpfn_v2.{timestamp}.submission.csv`
