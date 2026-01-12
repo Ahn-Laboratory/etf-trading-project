@@ -544,7 +544,7 @@ def main():
     parser.add_argument('--features', type=int, default=100)
     parser.add_argument('--samples', type=int, default=10000,
                        help='Max training samples (default: 10000, reduce if OOM)')
-    parser.add_argument('--chunk-size', type=int, default=5000,
+    parser.add_argument('--chunk-size', type=int, default=500,
                        help='Prediction chunk size (default: 5000, reduce if OOM)')
     parser.add_argument('--estimators', type=int, default=8)
     parser.add_argument('--device', type=str, default='cpu',
