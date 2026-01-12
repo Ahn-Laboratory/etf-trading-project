@@ -1,18 +1,21 @@
 """
-TabPFN Pipeline V2 for ETF Stock Prediction Competition
+Unified Experiment Pipeline for ETF Stock Prediction Competition
 
-규칙 준수 버전: 연도별 단일 모델 학습
-- 각 연도 시작 전 1개 모델만 학습
-- 해당 연도 전체 예측에 동일 모델 사용
+Supports multiple ML models via factory pattern.
+Competition rule compliant: single model per year.
+
+Usage:
+    python -m src.experiment_pipeline --model xgboost --features 150 --years 2020 2021 2022 2023 2024
 """
-import pandas as pd
-import numpy as np
+import gc
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 from tqdm import tqdm
-import warnings
-import time
-import gc
 
 from .config import config, DATA_DIR, SUBMISSIONS_DIR
 from .data.loader import DataLoader
@@ -23,51 +26,75 @@ from .features.volatility import add_volatility_features, VOLATILITY_FEATURES
 from .features.volume import add_volume_features, VOLUME_FEATURES
 from .features.returns import add_return_features, RETURN_FEATURES
 from .features.cross_sectional import add_cross_sectional_features, CROSS_SECTIONAL_FEATURES
-from .features.enhanced import add_enhanced_features, add_enhanced_cross_sectional, ENHANCED_FEATURES, ENHANCED_CROSS_SECTIONAL_FEATURES
-from .models.tabpfn_model import TabPFNRankingModel
+from .features.enhanced import (
+    add_enhanced_features,
+    add_enhanced_cross_sectional,
+    ENHANCED_FEATURES,
+    ENHANCED_CROSS_SECTIONAL_FEATURES
+)
+from .models.factory import create_model, get_available_models
 from .utils.evaluation import validate_submission
 
 
-class TabPFNPipelineV2:
+class ExperimentPipeline:
     """
-    규칙 준수 TabPFN 파이프라인
+    Unified experiment pipeline supporting multiple ML models
 
-    - 연도별 단일 모델 학습 (규칙 준수)
-    - 동일한 전처리, 입력 구조, 모델 구조
-    - 연도별 재학습만 수행
+    Competition rules:
+    - Single model per year
+    - Same preprocessing for all years
+    - Same model architecture for all years
     """
 
     def __init__(
         self,
+        model_name: str,
+        model_params: Optional[Dict] = None,
         data_dir: Path = DATA_DIR,
         output_dir: Path = SUBMISSIONS_DIR,
-        max_features: int = None,
-        max_train_samples: int = None,
-        device: str = None,
-        n_estimators: int = None,
-        pred_chunk_size: int = None,
+        max_features: int = 100,
+        max_train_samples: int = 50000,
+        device: str = 'auto',
+        pred_chunk_size: int = 5000,
         timestamp: str = None
     ):
+        """
+        Initialize pipeline
+
+        Args:
+            model_name: Name of the model (e.g., 'xgboost', 'ridge')
+            model_params: Model hyperparameters (overrides defaults)
+            data_dir: Data directory
+            output_dir: Output directory for submissions
+            max_features: Maximum number of features to select
+            max_train_samples: Maximum training samples
+            device: Compute device ('auto', 'cuda', 'cpu')
+            pred_chunk_size: Chunk size for batch prediction
+            timestamp: Timestamp for submission filename
+        """
+        self.model_name = model_name.lower()
+        self.model_params = model_params or {}
         self.data_dir = data_dir
         self.output_dir = output_dir
         self.output_dir.mkdir(exist_ok=True)
 
-        # 하이퍼파라미터 (모든 연도 동일)
-        self.max_features = max_features or 100
-        self.max_train_samples = max_train_samples or 50000
-        self.device = device or "cpu"
-        self.n_estimators = n_estimators or 8
-        self.pred_chunk_size = pred_chunk_size or 5000
-
-        # 타임스탬프 (제출 파일명에 사용)
-        from datetime import datetime
+        self.max_features = max_features
+        self.max_train_samples = max_train_samples
+        self.device = device
+        self.pred_chunk_size = pred_chunk_size
         self.timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
 
         self.loader = DataLoader(data_dir)
         self.preprocessor = Preprocessor(method='robust')
-        self.feature_cols: List[str] = []
+        self.feature_cols: List[str] = self._get_all_feature_cols()
         self.selected_features: List[str] = []
         self.results: Dict[int, pd.DataFrame] = {}
+        self.scores: Dict[int, float] = {}
+
+        # Validate model name
+        available = get_available_models()
+        if self.model_name not in available:
+            raise ValueError(f"Unknown model: {model_name}. Available: {available}")
 
     def _get_all_feature_cols(self) -> List[str]:
         """Get list of all feature columns"""
@@ -121,7 +148,7 @@ class TabPFNPipelineV2:
         df: pd.DataFrame,
         ticker: str
     ) -> Optional[pd.DataFrame]:
-        """Create features for a single ticker (동일한 전처리)"""
+        """Create features for a single ticker"""
         try:
             if len(df) < config.data.min_history_days:
                 return None
@@ -140,7 +167,7 @@ class TabPFNPipelineV2:
 
             return tmp
 
-        except Exception as e:
+        except Exception:
             return None
 
     def _get_required_dates(self, pred_year: int) -> List[str]:
@@ -157,39 +184,42 @@ class TabPFNPipelineV2:
         panel: pd.DataFrame,
         pred_year: int,
         train_years: int = 5
-    ) -> Tuple[pd.DataFrame, pd.Series]:
+    ) -> Tuple[pd.DataFrame, pd.Series, Optional[pd.DataFrame], Optional[pd.Series]]:
         """
-        연도별 학습 데이터 준비
+        Prepare training and validation data
 
-        pred_year 이전 train_years 기간의 데이터 사용
+        Returns:
+            (X_train, y_train, X_valid, y_valid)
         """
         train_start = f"{pred_year - train_years}-01-01"
-        
-        # LEAKAGE PREVENTION FIX
-        # Target is 3-month return, so target for date T is known at T + ~90 days
-        # We must filter for dates where target is revealed before pred_year-01-01
-        # otherwise we are using future information (prices from the prediction year)
-        
+
+        # Leakage prevention: cutoff 95 days before prediction year
         pred_start_ts = pd.Timestamp(f"{pred_year}-01-01")
         cutoff_date = pred_start_ts - pd.Timedelta(days=95)
         train_end = cutoff_date.strftime('%Y-%m-%d')
-        
-        print(f"  Training data cutoff: {train_end} (to prevent leakage)")
 
-        # 학습 데이터 필터링
-        mask = (
+        # Validation: last 6 months before cutoff
+        valid_start = (cutoff_date - pd.Timedelta(days=180)).strftime('%Y-%m-%d')
+
+        # Training data
+        train_mask = (
             (panel['date'] >= train_start) &
+            (panel['date'] < valid_start) &
+            panel['target_3m'].notna()
+        )
+        train_data = panel[train_mask].copy()
+
+        # Validation data
+        valid_mask = (
+            (panel['date'] >= valid_start) &
             (panel['date'] <= train_end) &
             panel['target_3m'].notna()
         )
-        train_data = panel[mask].copy()
+        valid_data = panel[valid_mask].copy()
 
-        # 샘플링 (TabPFN 제한 고려)
+        # Sampling for training
         if len(train_data) > self.max_train_samples:
-            # 최근 데이터 우선 + 균등 샘플링
             train_data = train_data.sort_values('date', ascending=False)
-
-            # 최근 50% + 나머지 랜덤 샘플링
             recent_count = self.max_train_samples // 2
             recent_data = train_data.head(recent_count)
             older_data = train_data.iloc[recent_count:].sample(
@@ -198,46 +228,48 @@ class TabPFNPipelineV2:
             )
             train_data = pd.concat([recent_data, older_data])
 
-        X = train_data[self.selected_features].fillna(0)
-        y = train_data['target_3m']
+        X_train = train_data[self.selected_features].fillna(0)
+        y_train = train_data['target_3m']
 
-        return X, y
+        X_valid = None
+        y_valid = None
+        if len(valid_data) > 0:
+            # Sample validation data too
+            if len(valid_data) > self.max_train_samples // 2:
+                valid_data = valid_data.sample(n=self.max_train_samples // 2, random_state=42)
+            X_valid = valid_data[self.selected_features].fillna(0)
+            y_valid = valid_data['target_3m']
 
-    def process_year(
+        return X_train, y_train, X_valid, y_valid
+
+    def load_data_for_year(
         self,
         pred_year: int,
         train_years: int = 5,
         verbose: bool = True
     ) -> pd.DataFrame:
         """
-        단일 연도 처리 (규칙 준수)
-
-        1. 연도 시작 전 1개 모델만 학습
-        2. 해당 연도 전체 예측에 동일 모델 사용
+        Load and prepare data panel for a specific year (model-agnostic)
+        
+        This includes:
+        1. Loading universe
+        2. Loading OHLCV data
+        3. generating technical/macro features
+        4. generating cross-sectional features
         """
         if verbose:
-            print(f"\n{'='*60}")
-            print(f"TabPFN V2 Processing {pred_year}")
-            print(f"  Device: {self.device}")
-            print(f"  Max features: {self.max_features}")
-            print(f"  Max train samples: {self.max_train_samples}")
-            print(f"  N estimators: {self.n_estimators}")
-            print(f"{'='*60}")
+            print(f"Loading data for year {pred_year}...")
 
-        required_dates = self._get_required_dates(pred_year)
-        if verbose and required_dates:
-            print(f"Required dates: {len(required_dates)} days")
-
-        # 데이터 로딩 범위
+        # Data loading range
         data_start = f"{pred_year - train_years - 1}-01-01"
         pred_end = f"{pred_year}-12-31"
 
-        # Universe 로드
+        # Load universe
         universe = self.loader.load_universe(pred_year)
         if verbose:
             print(f"Universe: {len(universe)} tickers")
-
-        # 데이터 로딩 및 피처 생성
+            
+        # Load data and create features
         if verbose:
             print(f"Loading data from {data_start} to {pred_end}...")
 
@@ -264,7 +296,7 @@ class TabPFNPipelineV2:
         if not frames:
             raise ValueError(f"No valid data for {pred_year}")
 
-        # 패널 생성
+        # Create panel
         panel = pd.concat(frames, ignore_index=True)
         del frames
         gc.collect()
@@ -276,28 +308,68 @@ class TabPFNPipelineV2:
             mem_mb = panel.memory_usage(deep=True).sum() / 1024 / 1024
             print(f"Panel: {len(panel):,} rows, {mem_mb:.1f} MB")
 
-        # 횡단면 피처 추가
+        # Add cross-sectional features
         if verbose:
             print("Adding cross-sectional features...")
         panel = add_cross_sectional_features(panel)
         panel = add_enhanced_cross_sectional(panel)
+        
+        return panel
 
-        # 피처 선택 (누수 방지 적용)
-        # STRICT LEAKAGE PREVENTION: Only use data available before the start of the prediction year
+    def process_year(
+        self,
+        pred_year: int,
+        train_years: int = 5,
+        verbose: bool = True,
+        panel: pd.DataFrame = None
+    ) -> pd.DataFrame:
+        """
+        Process a single year
+
+        1. Load data and create features (if panel not provided)
+        2. Select features
+        3. Train single model (competition compliant)
+        4. Predict for entire year
+        
+        Args:
+            pred_year: Year to predict
+            train_years: Number of training years
+            verbose: Print progress
+            panel: Pre-loaded dataframe (optional, for caching)
+        """
+        start_time = time.time()
+
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"Experiment Pipeline - {self.model_name.upper()}")
+            print(f"Processing {pred_year}")
+            print(f"  Model: {self.model_name}")
+            print(f"  Device: {self.device}")
+            print(f"  Max features: {self.max_features}")
+            print(f"  Max train samples: {self.max_train_samples}")
+            print(f"{'='*60}")
+
+        required_dates = self._get_required_dates(pred_year)
+        if verbose and required_dates:
+            print(f"Required dates: {len(required_dates)} days")
+
+        # 1. Load data or use cached panel
+        if panel is None:
+            panel = self.load_data_for_year(pred_year, train_years, verbose)
+        else:
+            if verbose:
+                print("Using pre-loaded data panel")
+
+        # Feature selection (with leakage prevention)
         pred_start_ts = pd.Timestamp(f"{pred_year}-01-01")
         feature_sel_cutoff = pred_start_ts - pd.Timedelta(days=95)
 
         if verbose:
             print(f"Selecting top {self.max_features} features...")
-            print(f"  Using data prior to {feature_sel_cutoff.date()} for feature selection")
+            print(f"  Using data prior to {feature_sel_cutoff.date()}")
 
-        # Create safe history panel for feature selection
         history_panel = panel[panel['date'] <= feature_sel_cutoff]
-        
         if len(history_panel) < 1000:
-             # Fallback if insufficient history (mostly for very first year if history is short)
-            if verbose:
-                print("  Warning: Insufficient historical data for strict selection. Using data up to pred_start.")
             history_panel = panel[panel['date'] < pred_start_ts]
 
         self.selected_features = self._select_features(history_panel, self.max_features)
@@ -306,31 +378,51 @@ class TabPFNPipelineV2:
             print(f"Top 5: {self.selected_features[:5]}")
 
         # ============================================
-        # 핵심: 연도별 단일 모델 학습 (규칙 준수)
+        # Train single model (competition compliant)
         # ============================================
         if verbose:
-            print(f"\nTraining single model for {pred_year}...")
+            print(f"\nTraining {self.model_name} model for {pred_year}...")
 
-        X_train, y_train = self._prepare_training_data(panel, pred_year, train_years)
+        X_train, y_train, X_valid, y_valid = self._prepare_training_data(
+            panel, pred_year, train_years
+        )
 
         if verbose:
             print(f"Training samples: {len(X_train):,}")
+            if X_valid is not None:
+                print(f"Validation samples: {len(X_valid):,}")
 
-        # 단일 모델 생성 및 학습
-        model = TabPFNRankingModel(
-            n_estimators=self.n_estimators,
-            device=self.device,
-            ignore_pretraining_limits=True,
-            memory_saving_mode=True,
-            random_state=config.seed
+        # Create model via factory
+        model_kwargs = {}
+        if self.device != 'auto' and self.model_name in ['xgboost', 'catboost']:
+            model_kwargs['device'] = self.device
+
+        model = create_model(self.model_name, self.model_params, **model_kwargs)
+
+        # Train
+        train_start_time = time.time()
+        model.fit(
+            X_train, y_train,
+            X_valid=X_valid, y_valid=y_valid,
+            feature_names=self.selected_features
         )
-        model.fit(X_train, y_train, feature_names=self.selected_features)
+        train_time = time.time() - train_start_time
 
-        del X_train, y_train
+        if verbose:
+            print(f"Training completed in {train_time:.1f}s")
+
+        # Feature importance
+        if verbose and model.get_feature_importance() is not None:
+            top_imp = model.get_feature_importance(top_n=5)
+            print("Top 5 features by importance:")
+            for _, row in top_imp.iterrows():
+                print(f"  {row['feature']}: {row['importance_pct']:.2f}%")
+
+        del X_train, y_train, X_valid, y_valid
         gc.collect()
 
         # ============================================
-        # 동일 모델로 연도 전체 예측 (배치 처리)
+        # Batch prediction for entire year
         # ============================================
         pred_start = f"{pred_year}-01-01"
         if required_dates:
@@ -339,21 +431,12 @@ class TabPFNPipelineV2:
             pred_panel = panel[(panel['date'] >= pred_start) & (panel['date'] <= pred_end)]
             target_dates = sorted(pred_panel['date'].unique())
 
-        # 예측 기간 데이터 필터링
         pred_panel = panel[panel['date'].isin(target_dates)].copy()
 
         if verbose:
             print(f"\nBatch predicting {len(pred_panel):,} rows...")
 
-        # GPU 메모리 정리
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except:
-            pass
-
-        # 청크 단위로 예측 (메모리 절약)
+        # Chunk-based prediction
         chunk_size = self.pred_chunk_size
         X_pred_all = pred_panel[self.selected_features].fillna(0)
 
@@ -371,11 +454,10 @@ class TabPFNPipelineV2:
             chunk_preds = model.predict(X_chunk)
             predictions_list.append(chunk_preds)
 
-            # 매 청크마다 메모리 정리
             del X_chunk
             gc.collect()
 
-            if verbose and (i + 1) % 10 == 0:
+            if verbose and (i + 1) % 20 == 0:
                 print(f"  Chunk {i+1}/{n_chunks} done")
 
         predictions_all = np.concatenate(predictions_list)
@@ -384,16 +466,10 @@ class TabPFNPipelineV2:
         del X_pred_all, predictions_list
         gc.collect()
 
-        try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except:
-            pass
-
         if verbose:
             print(f"Selecting Top-100 for {len(target_dates)} dates...")
 
-        # 날짜별 Top-100 선택
+        # Select Top-100 for each date
         results = []
         available_dates = set(pred_panel['date'].unique())
 
@@ -402,7 +478,6 @@ class TabPFNPipelineV2:
             date_str = date_ts.strftime('%Y-%m-%d')
 
             if date_ts not in available_dates:
-                # 이전 예측 사용
                 if results:
                     prev_preds = results[-100:]
                     for rank, pred in enumerate(prev_preds, 1):
@@ -427,8 +502,11 @@ class TabPFNPipelineV2:
         gc.collect()
 
         submission = pd.DataFrame(results)
+        elapsed = time.time() - start_time
+
         if verbose:
             print(f"Generated {len(submission):,} predictions ({len(target_dates)} days)")
+            print(f"Year {pred_year} completed in {elapsed/60:.1f} minutes")
 
         return submission
 
@@ -436,7 +514,8 @@ class TabPFNPipelineV2:
         self,
         pred_years: List[int] = None,
         train_years: int = 5,
-        verbose: bool = True
+        verbose: bool = True,
+        panels: Dict[int, pd.DataFrame] = None
     ) -> Dict[int, Path]:
         """Run pipeline for all years"""
         if pred_years is None:
@@ -445,22 +524,24 @@ class TabPFNPipelineV2:
         start_time = time.time()
 
         print("\n" + "="*60)
-        print("TABPFN V2 - 규칙 준수 버전")
-        print("연도별 단일 모델 학습")
+        print(f"EXPERIMENT PIPELINE - {self.model_name.upper()}")
         print("="*60)
+        print(f"Model: {self.model_name}")
+        print(f"Model params: {self.model_params}")
         print(f"Device: {self.device}")
         print(f"Max features: {self.max_features}")
         print(f"Max train samples: {self.max_train_samples}")
-        print(f"N estimators: {self.n_estimators}")
+        print(f"Years: {pred_years}")
 
         paths = {}
 
         for year in pred_years:
             try:
-                submission = self.process_year(year, train_years, verbose)
+                panel = panels.get(year) if panels else None
+                submission = self.process_year(year, train_years, verbose, panel=panel)
                 self.results[year] = submission
 
-                filepath = self.output_dir / f"{year}.tabpfn_v2.{self.timestamp}.submission.csv"
+                filepath = self.output_dir / f"{year}.{self.model_name}.{self.timestamp}.submission.csv"
                 submission.to_csv(filepath, index=False)
                 paths[year] = filepath
 
@@ -496,177 +577,45 @@ class TabPFNPipelineV2:
             print(f"  {year}: {actual:,} rows (expected ~{exp:,}) [{status}]")
 
 
-def run_single_year(args_tuple):
-    """단일 연도 처리 (멀티프로세싱용)"""
-    year, gpu_id, max_features, max_train_samples, n_estimators, train_years, log_dir = args_tuple
-
-    import os
-    import sys
-    from datetime import datetime
-
-    # CUDA_VISIBLE_DEVICES는 torch import 전에 설정해야 함
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-
-    # torch를 여기서 import해서 CUDA_VISIBLE_DEVICES 적용
-    import torch
-    torch.cuda.set_device(0)  # CUDA_VISIBLE_DEVICES로 인해 실제로는 gpu_id가 됨
-
-    # 연도별 로그 파일 생성
-    log_file = Path(log_dir) / f"tabpfn_v2_{year}_gpu{gpu_id}.log"
-    log_file.parent.mkdir(exist_ok=True)
-
-    # stdout/stderr를 로그 파일로 리다이렉트
-    with open(log_file, 'w') as f:
-        sys.stdout = f
-        sys.stderr = f
-
-        print(f"[{datetime.now()}] Starting {year} on GPU {gpu_id}")
-        print(f"Log file: {log_file}")
-
-        pipeline = TabPFNPipelineV2(
-            max_features=max_features,
-            max_train_samples=max_train_samples,
-            device='cuda',
-            n_estimators=n_estimators
-        )
-
-        try:
-            submission = pipeline.process_year(year, train_years, verbose=True)
-            filepath = pipeline.output_dir / f"{year}.tabpfn_v2.{pipeline.timestamp}.submission.csv"
-            submission.to_csv(filepath, index=False)
-            print(f"\n[{datetime.now()}] Saved: {filepath}")
-
-            # 원래 stdout으로 복구하고 완료 메시지
-            sys.stdout = sys.__stdout__
-            sys.stderr = sys.__stderr__
-            print(f"[GPU {gpu_id}] {year} completed -> {log_file}")
-
-            return (year, str(filepath), str(log_file))
-        except Exception as e:
-            import traceback
-            print(f"\n[{datetime.now()}] Error: {e}")
-            traceback.print_exc()
-
-            sys.stdout = sys.__stdout__
-            sys.stderr = sys.__stderr__
-            print(f"[GPU {gpu_id}] {year} FAILED -> {log_file}")
-
-            return (year, None, str(log_file))
-
-
 def main():
     """Main entry point"""
     import argparse
-    import os
 
-    parser = argparse.ArgumentParser(description='Run TabPFN V2 (규칙 준수)')
+    parser = argparse.ArgumentParser(description='Run ML Experiment Pipeline')
+    parser.add_argument('--model', type=str, required=True,
+                        help=f'Model name: {get_available_models()}')
     parser.add_argument('--year', type=int, nargs='+', default=None)
     parser.add_argument('--train-years', type=int, default=5)
     parser.add_argument('--features', type=int, default=100)
-    parser.add_argument('--samples', type=int, default=10000,
-                       help='Max training samples (default: 10000, reduce if OOM)')
-    parser.add_argument('--chunk-size', type=int, default=500,
-                       help='Prediction chunk size (default: 5000, reduce if OOM)')
-    parser.add_argument('--estimators', type=int, default=8)
-    parser.add_argument('--device', type=str, default='cpu',
-                       choices=['cpu', 'mps', 'cuda'])
-    parser.add_argument('--multi-gpu', action='store_true',
-                       help='Use multiple GPUs (one year per GPU)')
-    parser.add_argument('--gpu-ids', type=int, nargs='+', default=[0, 1],
-                       help='GPU IDs to use (default: 0 1)')
-    parser.add_argument('--timestamp', type=str, default=None,
-                       help='Timestamp for submission filename (auto-generated if not provided)')
+    parser.add_argument('--samples', type=int, default=50000)
+    parser.add_argument('--chunk-size', type=int, default=5000)
+    parser.add_argument('--device', type=str, default='auto',
+                        choices=['auto', 'cpu', 'cuda', 'mps'])
+    parser.add_argument('--timestamp', type=str, default=None)
     parser.add_argument('--quiet', action='store_true')
+
+    # Model-specific params (as JSON string)
+    parser.add_argument('--params', type=str, default=None,
+                        help='Model params as JSON string, e.g., \'{"alpha": 0.5}\'')
 
     args = parser.parse_args()
 
-    # 타임스탬프 생성 (전체 실행에서 동일하게 사용)
-    from datetime import datetime
-    timestamp = args.timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Parse model params
+    model_params = None
+    if args.params:
+        import json
+        model_params = json.loads(args.params)
 
     pred_years = args.year if args.year else [2020, 2021, 2022, 2023, 2024]
 
-    # ============================================
-    # 멀티 GPU 모드 (subprocess로 완전 분리)
-    # ============================================
-    if args.multi_gpu:
-        import subprocess
-
-        num_gpus = len(args.gpu_ids)
-        log_dir = Path(f"logs/multi_gpu_{timestamp}")
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        print(f"\n{'='*60}")
-        print(f"MULTI-GPU MODE: {num_gpus} GPUs (subprocess)")
-        print(f"GPU IDs: {args.gpu_ids}")
-        print(f"Log directory: {log_dir}/")
-        print(f"{'='*60}")
-
-        # 연도를 GPU에 분배
-        tasks = []
-        for i, year in enumerate(pred_years):
-            gpu_id = args.gpu_ids[i % num_gpus]
-            tasks.append((year, gpu_id))
-
-        print(f"\nTask distribution:")
-        for year, gpu_id in tasks:
-            print(f"  {year} -> GPU {gpu_id}")
-
-        print(f"\nStarting parallel execution...")
-
-        # subprocess로 병렬 실행
-        processes = []
-        for year, gpu_id in tasks:
-            log_file = log_dir / f"tabpfn_v2_{year}_gpu{gpu_id}.log"
-            cmd = [
-                "python", "-m", "src.tabpfn_pipeline_v2",
-                "--year", str(year),
-                "--device", "cuda",
-                "--features", str(args.features),
-                "--samples", str(args.samples),
-                "--chunk-size", str(args.chunk_size),
-                "--estimators", str(args.estimators),
-                "--train-years", str(args.train_years),
-                "--timestamp", timestamp,
-            ]
-            env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_id)}
-
-            with open(log_file, 'w') as f:
-                proc = subprocess.Popen(cmd, env=env, stdout=f, stderr=f)
-                processes.append((year, gpu_id, proc, log_file))
-                print(f"  Started {year} on GPU {gpu_id} (PID: {proc.pid})")
-
-        # 완료 대기
-        print(f"\nWaiting for completion...")
-        print(f"Monitor: tail -f {log_dir}/*.log")
-
-        results = []
-        for year, gpu_id, proc, log_file in processes:
-            proc.wait()
-            status = "OK" if proc.returncode == 0 else "FAILED"
-            results.append((year, gpu_id, status, log_file))
-            print(f"  [GPU {gpu_id}] {year}: {status}")
-
-        print(f"\n{'='*60}")
-        print("RESULTS")
-        print(f"{'='*60}")
-        for year, gpu_id, status, log_file in results:
-            submission_file = f"submissions/{year}.tabpfn_v2.{timestamp}.submission.csv"
-            print(f"  {year}: [{status}] {submission_file if status == 'OK' else 'N/A'}")
-
-        print(f"\nLog files: {log_dir}/")
-        return
-
-    # ============================================
-    # 단일 GPU/CPU 모드
-    # ============================================
-    pipeline = TabPFNPipelineV2(
+    pipeline = ExperimentPipeline(
+        model_name=args.model,
+        model_params=model_params,
         max_features=args.features,
         max_train_samples=args.samples,
         device=args.device,
-        n_estimators=args.estimators,
         pred_chunk_size=args.chunk_size,
-        timestamp=timestamp
+        timestamp=args.timestamp
     )
 
     paths = pipeline.run(
@@ -678,6 +627,8 @@ def main():
     print("\nSubmission files:")
     for year, path in paths.items():
         print(f"  {year}: {path}")
+
+    print(f"\nAvailable models: {get_available_models()}")
 
 
 if __name__ == "__main__":
