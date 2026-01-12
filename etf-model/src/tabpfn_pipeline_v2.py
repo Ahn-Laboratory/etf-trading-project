@@ -45,7 +45,8 @@ class TabPFNPipelineV2:
         max_train_samples: int = None,
         device: str = None,
         n_estimators: int = None,
-        pred_chunk_size: int = None
+        pred_chunk_size: int = None,
+        timestamp: str = None
     ):
         self.data_dir = data_dir
         self.output_dir = output_dir
@@ -57,6 +58,10 @@ class TabPFNPipelineV2:
         self.device = device or "cpu"
         self.n_estimators = n_estimators or 8
         self.pred_chunk_size = pred_chunk_size or 5000
+
+        # 타임스탬프 (제출 파일명에 사용)
+        from datetime import datetime
+        self.timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
 
         self.loader = DataLoader(data_dir)
         self.preprocessor = Preprocessor(method='robust')
@@ -434,7 +439,7 @@ class TabPFNPipelineV2:
                 submission = self.process_year(year, train_years, verbose)
                 self.results[year] = submission
 
-                filepath = self.output_dir / f"{year}.tabpfn_v2.submission.csv"
+                filepath = self.output_dir / f"{year}.tabpfn_v2.{self.timestamp}.submission.csv"
                 submission.to_csv(filepath, index=False)
                 paths[year] = filepath
 
@@ -506,7 +511,7 @@ def run_single_year(args_tuple):
 
         try:
             submission = pipeline.process_year(year, train_years, verbose=True)
-            filepath = pipeline.output_dir / f"{year}.tabpfn_v2.submission.csv"
+            filepath = pipeline.output_dir / f"{year}.tabpfn_v2.{pipeline.timestamp}.submission.csv"
             submission.to_csv(filepath, index=False)
             print(f"\n[{datetime.now()}] Saved: {filepath}")
 
@@ -548,9 +553,15 @@ def main():
                        help='Use multiple GPUs (one year per GPU)')
     parser.add_argument('--gpu-ids', type=int, nargs='+', default=[0, 1],
                        help='GPU IDs to use (default: 0 1)')
+    parser.add_argument('--timestamp', type=str, default=None,
+                       help='Timestamp for submission filename (auto-generated if not provided)')
     parser.add_argument('--quiet', action='store_true')
 
     args = parser.parse_args()
+
+    # 타임스탬프 생성 (전체 실행에서 동일하게 사용)
+    from datetime import datetime
+    timestamp = args.timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
 
     pred_years = args.year if args.year else [2020, 2021, 2022, 2023, 2024]
 
@@ -559,10 +570,8 @@ def main():
     # ============================================
     if args.multi_gpu:
         import subprocess
-        from datetime import datetime
 
         num_gpus = len(args.gpu_ids)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_dir = Path(f"logs/multi_gpu_{timestamp}")
         log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -597,6 +606,7 @@ def main():
                 "--chunk-size", str(args.chunk_size),
                 "--estimators", str(args.estimators),
                 "--train-years", str(args.train_years),
+                "--timestamp", timestamp,
             ]
             env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_id)}
 
@@ -620,7 +630,7 @@ def main():
         print("RESULTS")
         print(f"{'='*60}")
         for year, gpu_id, status, log_file in results:
-            submission_file = f"submissions/{year}.tabpfn_v2.submission.csv"
+            submission_file = f"submissions/{year}.tabpfn_v2.{timestamp}.submission.csv"
             print(f"  {year}: [{status}] {submission_file if status == 'OK' else 'N/A'}")
 
         print(f"\nLog files: {log_dir}/")
@@ -634,7 +644,8 @@ def main():
         max_train_samples=args.samples,
         device=args.device,
         n_estimators=args.estimators,
-        pred_chunk_size=args.chunk_size
+        pred_chunk_size=args.chunk_size,
+        timestamp=timestamp
     )
 
     paths = pipeline.run(
