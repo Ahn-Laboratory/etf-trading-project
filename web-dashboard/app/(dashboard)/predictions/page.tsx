@@ -1,7 +1,9 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ArrowDown, ArrowUp, RefreshCw, AlertCircle } from "lucide-react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { ArrowDown, ArrowUp, RefreshCw, AlertCircle, ChevronRight } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { fetchPredictions, type Prediction } from "@/lib/api"
 
 export default function PredictionsPage() {
+  const router = useRouter()
   const [predictions, setPredictions] = useState<Prediction[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -175,7 +178,7 @@ export default function PredictionsPage() {
             <CardHeader>
               <CardTitle>예측 상세</CardTitle>
               <CardDescription>
-                마지막 업데이트: {predictions[0]?.updatedAt || "-"}
+                마지막 업데이트: {predictions[0]?.updatedAt || "-"} | 종목을 클릭하면 상세 차트를 볼 수 있습니다
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -200,11 +203,17 @@ export default function PredictionsPage() {
                   </TableHeader>
                   <TableBody>
                     {filteredPredictions.map((prediction) => (
-                      <TableRow key={prediction.symbol}>
+                      <TableRow
+                        key={prediction.symbol}
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => router.push(`/predictions/${prediction.symbol}`)}
+                      >
                         <TableCell>
-                          <div>
-                            <div className="font-medium">{prediction.symbol}</div>
-                            <div className="text-sm text-muted-foreground">{prediction.name}</div>
+                          <div className="flex items-center gap-2">
+                            <div>
+                              <div className="font-medium">{prediction.symbol}</div>
+                              <div className="text-sm text-muted-foreground">{prediction.name}</div>
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell>${prediction.currentPrice.toFixed(2)}</TableCell>
@@ -248,15 +257,18 @@ export default function PredictionsPage() {
                           </div>
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className={`flex items-center justify-end gap-1 ${
-                            prediction.predictedChange >= 0 ? "text-green-600" : "text-red-600"
-                          }`}>
-                            {prediction.predictedChange >= 0 ? (
-                              <ArrowUp className="h-4 w-4" />
-                            ) : (
-                              <ArrowDown className="h-4 w-4" />
-                            )}
-                            {prediction.predictedChange >= 0 ? "+" : ""}{prediction.predictedChange.toFixed(2)}%
+                          <div className="flex items-center justify-end gap-2">
+                            <div className={`flex items-center gap-1 ${
+                              prediction.predictedChange >= 0 ? "text-green-600" : "text-red-600"
+                            }`}>
+                              {prediction.predictedChange >= 0 ? (
+                                <ArrowUp className="h-4 w-4" />
+                              ) : (
+                                <ArrowDown className="h-4 w-4" />
+                              )}
+                              {prediction.predictedChange >= 0 ? "+" : ""}{prediction.predictedChange.toFixed(2)}%
+                            </div>
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
                           </div>
                         </TableCell>
                       </TableRow>

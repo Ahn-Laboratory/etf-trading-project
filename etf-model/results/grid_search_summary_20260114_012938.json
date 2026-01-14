@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-01-14T01:29:38.965192",
+  "total_files": 324,
+  "successful_scores": 324,
+  "models": {
+    "xgboost": {
+      "count": 125,
+      "min_score": 0.15925,
+      "max_score": 0.19514,
+      "avg_score": 0.17444399999999993,
+      "best_config": "xgb_d8_lr0005_n1000",
+      "best_score": 0.19514
+    },
+    "catboost": {
+      "count": 125,
+      "min_score": 0.10486,
+      "max_score": 0.16806,
+      "avg_score": 0.14028560000000004,
+      "best_config": "cb_d4_lr001_n1000",
+      "best_score": 0.16806
+    },
+    "random_forest": {
+      "count": 74,
+      "min_score": 0.19395,
+      "max_score": 0.21387,
+      "avg_score": 0.20415959459459457,
+      "best_config": "rf_d15_mf01_n1500",
+      "best_score": 0.21387
+    }
+  }
+}

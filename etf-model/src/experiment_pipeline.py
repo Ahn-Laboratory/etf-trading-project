@@ -33,7 +33,8 @@ from .features.enhanced import (
     ENHANCED_CROSS_SECTIONAL_FEATURES
 )
 from .models.factory import create_model, get_available_models
-from .utils.evaluation import validate_submission
+from .models.factory import create_model, get_available_models
+from .utils.evaluation import validate_submission, backtest_strategy
 
 
 class ExperimentPipeline:
@@ -75,8 +76,8 @@ class ExperimentPipeline:
         self.model_name = model_name.lower()
         self.model_params = model_params or {}
         self.data_dir = data_dir
-        self.output_dir = output_dir
-        self.output_dir.mkdir(exist_ok=True)
+        self.output_dir = output_dir / self.model_name
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.max_features = max_features
         self.max_train_samples = max_train_samples
@@ -89,6 +90,7 @@ class ExperimentPipeline:
         self.feature_cols: List[str] = self._get_all_feature_cols()
         self.selected_features: List[str] = []
         self.results: Dict[int, pd.DataFrame] = {}
+        self.metrics: Dict[int, Dict] = {}
         self.scores: Dict[int, float] = {}
 
         # Validate model name
@@ -507,6 +509,18 @@ class ExperimentPipeline:
         if verbose:
             print(f"Generated {len(submission):,} predictions ({len(target_dates)} days)")
             print(f"Year {pred_year} completed in {elapsed/60:.1f} minutes")
+
+        # Backtest
+        try:
+            metrics = backtest_strategy(submission, panel, target_col='target_3m')
+            self.metrics[pred_year] = metrics
+            if verbose:
+                print(f"Backtest Score ({pred_year}):")
+                print(f"  Mean Return:   {metrics['mean_return']:.6f}")
+                print(f"  Sharpe Ratio:  {metrics['sharpe_ratio']:.4f}")
+                print(f"  Positive Days: {metrics['positive_days']}/{metrics['total_days']}")
+        except Exception as e:
+            print(f"Backtest failed for {pred_year}: {e}")
 
         return submission
 

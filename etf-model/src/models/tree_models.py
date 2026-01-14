@@ -50,19 +50,20 @@ class XGBRankingModel(BaseRankingModel):
     XGBoost-based ranking model
 
     Supports GPU acceleration via tree_method='gpu_hist'
+    Grid Search optimized params (2020): depth=8, lr=0.005, n=500
     """
 
-    # Default parameters optimized for stock ranking
+    # Grid Search optimized parameters (2020년 최적)
     DEFAULT_PARAMS = {
         'objective': 'reg:squarederror',
-        'n_estimators': 1000,
+        'n_estimators': 500,
         'max_depth': 8,
-        'learning_rate': 0.02,
-        'subsample': 0.7,
-        'colsample_bytree': 0.7,
-        'reg_alpha': 0.3,
-        'reg_lambda': 0.3,
-        'min_child_weight': 5,
+        'learning_rate': 0.005,
+        'subsample': 0.8,
+        'colsample_bytree': 0.8,
+        'reg_alpha': 0.2,
+        'reg_lambda': 0.2,
+        'min_child_weight': 3,
         'random_state': 42,
         'n_jobs': -1,
     }
@@ -91,6 +92,13 @@ class XGBRankingModel(BaseRankingModel):
             self.params['device'] = 'cuda'
         else:
             self.params['tree_method'] = 'hist'
+
+        # FIX: On macOS, default OpenMP implementation often conflicts with Joblib (scikit-learn)
+        # leading to segmentation faults when running multiple models sequentially.
+        # Defaulting to 1 thread is safer unless explicitly overridden.
+        import platform
+        if platform.system() == 'Darwin' and self.params.get('n_jobs', -1) == -1:
+            self.params['n_jobs'] = 1
 
         self.device = device
         self.model = None
@@ -126,8 +134,14 @@ class XGBRankingModel(BaseRankingModel):
 
         # Extract training params
         n_estimators = self.params.pop('n_estimators', 1000)
+        n_jobs = self.params.get('n_jobs', 1)
+        
         train_params = {k: v for k, v in self.params.items()
-                        if k not in ['n_jobs']}  # xgb.train doesn't use n_jobs
+                        if k not in ['n_jobs']}
+        
+        # Explicitly set threads for XGBoost to avoid conflicts
+        if n_jobs != -1:
+            train_params['nthread'] = n_jobs
 
         # Train
         self.model = xgb.train(
@@ -191,14 +205,18 @@ class CatBoostRankingModel(BaseRankingModel):
     CatBoost-based ranking model
 
     Supports GPU acceleration via task_type='GPU'
+    Grid Search optimized params (2020): depth=4, lr=0.01, n=500
     """
 
+    # Grid Search optimized parameters (2020년 최적)
     DEFAULT_PARAMS = {
-        'iterations': 1000,
-        'depth': 8,
-        'learning_rate': 0.02,
-        'l2_leaf_reg': 3.0,
-        'subsample': 0.7,
+        'iterations': 500,
+        'depth': 4,
+        'learning_rate': 0.01,
+        'l2_leaf_reg': 5.0,
+        'subsample': 0.8,
+        'border_count': 254,
+        'random_strength': 0.5,
         'random_seed': 42,
         'verbose': 100,
         'allow_writing_files': False,
@@ -307,14 +325,18 @@ class RandomForestRankingModel(BaseRankingModel):
     Random Forest-based ranking model
 
     Uses sklearn RandomForestRegressor
+    Grid Search optimized params (2020): depth=15, max_features=0.1, n=1500
     """
 
+    # Grid Search optimized parameters (2020년 최적)
     DEFAULT_PARAMS = {
-        'n_estimators': 500,
+        'n_estimators': 1500,
         'max_depth': 15,
-        'min_samples_split': 5,
-        'min_samples_leaf': 2,
-        'max_features': 'sqrt',
+        'min_samples_split': 2,
+        'min_samples_leaf': 1,
+        'max_features': 0.1,
+        'bootstrap': True,
+        'oob_score': True,
         'n_jobs': -1,
         'random_state': 42,
         'verbose': 1,

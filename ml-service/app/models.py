@@ -19,6 +19,7 @@ class Prediction(Base):
     rsi_value = Column(Float, nullable=True)
     macd_value = Column(Float, nullable=True)
     actual_close = Column(Float, nullable=True)  # 나중에 업데이트
+    actual_return = Column(Float, nullable=True)  # 실제 수익률 (%)
     is_correct = Column(Boolean, nullable=True)  # 나중에 업데이트
     created_at = Column(DateTime, default=datetime.utcnow)
 

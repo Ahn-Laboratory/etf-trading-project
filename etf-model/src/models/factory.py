@@ -183,34 +183,45 @@ def _register_all_models():
             RandomForestRankingModel,
             ExtraTreesRankingModel
         )
+        # Grid Search 최적 파라미터 (2020년 기준)
         register_model(
             name='xgboost',
             model_class=XGBRankingModel,
             default_params={
-                'n_estimators': 1000,
+                'n_estimators': 500,
                 'max_depth': 8,
-                'learning_rate': 0.02,
+                'learning_rate': 0.005,
+                'subsample': 0.8,
+                'colsample_bytree': 0.8,
+                'reg_alpha': 0.2,
+                'reg_lambda': 0.2,
+                'min_child_weight': 3,
             },
-            description='XGBoost gradient boosting'
+            description='XGBoost gradient boosting (Grid Search optimized)'
         )
         register_model(
             name='catboost',
             model_class=CatBoostRankingModel,
             default_params={
-                'iterations': 1000,
-                'depth': 8,
-                'learning_rate': 0.02,
+                'iterations': 500,
+                'depth': 4,
+                'learning_rate': 0.01,
+                'l2_leaf_reg': 5.0,
+                'subsample': 0.8,
             },
-            description='CatBoost gradient boosting'
+            description='CatBoost gradient boosting (Grid Search optimized)'
         )
         register_model(
             name='random_forest',
             model_class=RandomForestRankingModel,
             default_params={
-                'n_estimators': 500,
+                'n_estimators': 1500,
                 'max_depth': 15,
+                'max_features': 0.1,
+                'min_samples_split': 2,
+                'min_samples_leaf': 1,
             },
-            description='Random Forest regressor'
+            description='Random Forest regressor (Grid Search optimized)'
         )
         register_model(
             name='extra_trees',
@@ -255,6 +266,21 @@ def _register_all_models():
             model_class=SVRRankingModel,
             default_params={'C': 1.0, 'epsilon': 0.1},
             description='Support Vector Regression'
+        )
+    except ImportError:
+        pass
+
+    # Ensemble model
+    try:
+        from .ensemble_model import EnsembleRankingModel
+        register_model(
+            name='ensemble',
+            model_class=EnsembleRankingModel,
+            default_params={
+                'model_names': ['xgboost', 'catboost', 'random_forest'],
+                'strategy': 'rank_avg'
+            },
+            description='Ensemble of multiple models with rank averaging'
         )
     except ImportError:
         pass

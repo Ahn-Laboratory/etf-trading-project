@@ -125,10 +125,11 @@ ssh ahnbi1.suwon.ac.kr
 # 프로젝트 경로
 cd /data2/project/2025summer/jwc0706/etf-trading-project/etf-model
 
-# GPU: RTX 3090 x2
+# GPU: RTX 3090(GPU RAM : 24) x2
 ```
 
 ## 규칙
 1) 긴 시간이 걸리는 작업은 nohup으로 백그라운드 실행, logs/ 폴더에 로그 기록
 2) TabPFN V1 (날짜별 학습)은 규칙 위반 - V2 (연도별 학습) 사용
-3) 제출 파일명: `{year}.tabpfn_v2.{timestamp}.submission.csv`
+3) 제출 파일명: `{model_name}_{hyper_param_info}/{year}.{model_name}.{timestamp}.submission.csv`
+4) panel 로딩 시간이 길기 때문에 실험 설계시 자원(데이터) 재활용을 고려하는 것이 필요함

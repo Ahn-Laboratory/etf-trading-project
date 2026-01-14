@@ -1,0 +1,7 @@
+usage: ensemble_pipeline.py [-h] --name NAME --models MODELS [MODELS ...]
+                            [--strategy {prediction_avg,rank_avg,weighted,borda}]
+                            [--year YEAR [YEAR ...]]
+                            [--train-years TRAIN_YEARS] [--features FEATURES]
+                            [--samples SAMPLES] [--chunk-size CHUNK_SIZE]
+                            [--timestamp TIMESTAMP] [--quiet]
+ensemble_pipeline.py: error: the following arguments are required: --name, --models

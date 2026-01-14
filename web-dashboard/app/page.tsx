@@ -1,372 +1,142 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { ArrowDown, ArrowUp, Briefcase, LineChart, TrendingUp, DollarSign, AlertCircle, FileText, ChevronRight } from "lucide-react"
+import Image from "next/image"
 import Link from "next/link"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
-import { fetchPredictions, checkHealth, fetchLatestFactsheet, type Prediction, type MonthlyFactsheet } from "@/lib/api"
-import { SNOWBALLING_ETF } from "@/lib/types/snowballing-etf"
+import { ArrowUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { portfolio, returns } from "@/lib/data"
-import {
-  ChartConfig,
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart"
-import { Area, AreaChart, XAxis, YAxis } from "recharts"
+import { ThemeToggle } from "@/components/theme-toggle"
+import { HeroSection } from "@/components/landing/hero-section"
+import { TimelineSection } from "@/components/landing/timeline-section"
+import { FeaturesSection } from "@/components/landing/features-section"
+import { TechSection } from "@/components/landing/tech-section"
 
-const chartConfig = {
-  portfolioValue: {
-    label: "포트폴리오 가치",
-    color: "var(--chart-1)",
-  },
-} satisfies ChartConfig
-
-export default function DashboardPage() {
-  const [predictions, setPredictions] = useState<Prediction[]>([])
-  const [loading, setLoading] = useState(true)
-  const [apiStatus, setApiStatus] = useState<"ok" | "error" | "loading">("loading")
-  const [latestFactsheet, setLatestFactsheet] = useState<MonthlyFactsheet | null>(null)
-
-  useEffect(() => {
-    async function loadData() {
-      setLoading(true)
-      try {
-        const [predictionsData, health] = await Promise.all([
-          fetchPredictions(),
-          checkHealth(),
-        ])
-        setPredictions(predictionsData)
-        setApiStatus(health.status === "unhealthy" ? "error" : "ok")
-
-        // 최신 팩트시트 로드 (별도 try-catch로 실패해도 다른 데이터는 표시)
-        try {
-          const factsheet = await fetchLatestFactsheet()
-          setLatestFactsheet(factsheet)
-        } catch {
-          // 팩트시트 로드 실패 시 무시 (아직 생성되지 않았을 수 있음)
-        }
-      } catch {
-        setApiStatus("error")
-      } finally {
-        setLoading(false)
-      }
-    }
-    loadData()
-  }, [])
-
-  const recentReturns = returns.slice(-7)
-  const topPredictions = predictions.slice(0, 5)
-  const topHoldings = portfolio.slice(0, 5)
-
-  const summary = {
-    totalValue: portfolio.reduce((sum, item) => sum + item.totalValue, 0),
-    totalProfit: portfolio.reduce((sum, item) => sum + item.profit, 0),
-    profitPercent: 5.23,
-    buySignals: predictions.filter((p) => p.signal === "BUY").length,
-    sellSignals: predictions.filter((p) => p.signal === "SELL").length,
-    holdSignals: predictions.filter((p) => p.signal === "HOLD").length,
+export default function LandingPage() {
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
   return (
-    <div className="space-y-6">
-      {/* API 상태 알림 */}
-      {apiStatus === "error" && (
-        <Card className="border-yellow-200 bg-yellow-50">
-          <CardContent className="pt-4 pb-4">
-            <div className="flex items-center gap-2 text-yellow-700">
-              <AlertCircle className="h-4 w-4" />
-              <span className="text-sm">원격 DB 연결 오류 - 로컬 데이터로 표시 중</span>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* 요약 카드 */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">총 포트폴리오 가치</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-[var(--chart-1)]">
-              ${summary.totalValue.toLocaleString()}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              <span className={summary.profitPercent >= 0 ? "text-green-600" : "text-red-600"}>
-                {summary.profitPercent >= 0 ? "+" : ""}{summary.profitPercent}%
-              </span>{" "}
-              전일 대비
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">총 수익</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold ${summary.totalProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
-              {summary.totalProfit >= 0 ? "+" : ""}${summary.totalProfit.toLocaleString()}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              전체 보유 종목 기준
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">보유 종목</CardTitle>
-            <Briefcase className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{portfolio.length}</div>
-            <p className="text-xs text-muted-foreground">
-              {portfolio.filter(p => p.profit > 0).length}개 수익, {portfolio.filter(p => p.profit <= 0).length}개 손실
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">오늘의 시그널</CardTitle>
-            <LineChart className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <Skeleton className="h-6 w-32" />
-            ) : (
-              <div className="flex gap-2">
-                <Badge variant="default" className="bg-green-600">매수 {summary.buySignals}</Badge>
-                <Badge variant="destructive">매도 {summary.sellSignals}</Badge>
-                <Badge variant="secondary">관망 {summary.holdSignals}</Badge>
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground mt-2">
-              {loading ? "로딩 중..." : `총 ${predictions.length}개 종목 분석`}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 메뉴 개요 섹션 */}
-      <div>
-        <h3 className="text-lg font-semibold mb-3">메뉴 개요</h3>
-        {/* <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <Link href="/predictions">
-            <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">예측 결과</CardTitle>
-                <LineChart className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground">
-                  RSI/MACD 기반 매매 신호 확인 및 종목별 예측 결과 조회
-                </p>
-              </CardContent>
-            </Card>
+    <div className="min-h-screen">
+      {/* Navigation */}
+      <nav className="fixed top-0 left-0 right-0 z-50 bg-[#002B5B]/80 backdrop-blur-md border-b border-white/10">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-2">
+            {/* <div className="w-8 h-8 rounded-lg bg-[#00E5FF] flex items-center justify-center">
+              <span className="font-bold text-[#002B5B]">S</span>
+            </div> */}
+            <Image
+              src="/icon.png"
+              alt="ETF Trading Logo"
+              width={32}
+              height={32}
+              className="object-contain"
+            />
+            <span className="font-semibold text-white">Snowballing AI ETF</span>
           </Link>
-
-          <Link href="/portfolio">
-            <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">포트폴리오</CardTitle>
-                <Briefcase className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground">
-                  보유 종목 현황 및 자산 배분 분석
-                </p>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/returns">
-            <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">수익률 분석</CardTitle>
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground">
-                  누적/일일 수익률 및 종목별 기여도 분석
-                </p>
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/factsheet">
-            <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full border-primary/20">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">팩트시트</CardTitle>
-                <FileText className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground">
-                  {SNOWBALLING_ETF.name} 월별 리포트 및 Top-10 종목 구성
-                </p>
-              </CardContent>
-            </Card>
-          </Link>
-        </div> */}
-      </div>
-
-      {/* Snowballing AI ETF 요약 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileText className="h-5 w-5" />
-            {SNOWBALLING_ETF.name}
-          </CardTitle>
-          <CardDescription>AI 예측 기반 월별 팩트시트 요약</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="space-y-2">
-              <p className="text-sm">{SNOWBALLING_ETF.description}</p>
-              {latestFactsheet ? (
-                <div className="flex items-center gap-4 text-sm">
-                  <span className="text-muted-foreground">
-                    최신 기준: {latestFactsheet.year}년 {latestFactsheet.month}월
-                  </span>
-                  <span className="text-muted-foreground">|</span>
-                  <span>
-                    Top 종목: {latestFactsheet.compositions.slice(0, 3).map(c => c.ticker).join(", ")}
-                    {latestFactsheet.compositions.length > 3 && " ..."}
-                  </span>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  팩트시트 데이터가 아직 생성되지 않았습니다.
-                </p>
-              )}
-            </div>
-            <Link href="/factsheet">
-              <Button variant="outline" size="sm">
-                자세히 보기
-                <ChevronRight className="h-4 w-4 ml-1" />
+          <div className="flex items-center gap-4">
+            <Link href="/dashboard">
+              <Button variant="ghost" className="text-white hover:text-[#00E5FF]">
+                대시보드
               </Button>
             </Link>
+            <Link href="/predictions">
+              <Button variant="ghost" className="text-white hover:text-[#00E5FF]">
+                예측 결과
+              </Button>
+            </Link>
+            <Link href="/factsheet">
+              <Button variant="ghost" className="text-white hover:text-[#00E5FF]">
+                팩트시트
+              </Button>
+            </Link>
+            <ThemeToggle />
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </nav>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        {/* 포트폴리오 차트 */}
-        <Card className="col-span-4">
-          <CardHeader>
-            <CardTitle>포트폴리오 추이</CardTitle>
-            <CardDescription>최근 7일 포트폴리오 가치 변동</CardDescription>
-          </CardHeader>
-          <CardContent className="pl-2">
-            <ChartContainer config={chartConfig} className="h-[250px] w-full">
-              <AreaChart data={recentReturns}>
-                <defs>
-                  <linearGradient id="fillValue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--color-portfolioValue)" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="var(--color-portfolioValue)" stopOpacity={0.1} />
-                  </linearGradient>
-                </defs>
-                <XAxis
-                  dataKey="date"
-                  tickFormatter={(value) => value.slice(5)}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <YAxis
-                  tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Area
-                  type="monotone"
-                  dataKey="portfolioValue"
-                  stroke="var(--color-portfolioValue)"
-                  fill="url(#fillValue)"
-                />
-              </AreaChart>
-            </ChartContainer>
-          </CardContent>
-        </Card>
+      {/* Main Content */}
+      <main>
+        <HeroSection />
+        <TimelineSection />
+        <FeaturesSection />
+        <TechSection />
+      </main>
 
-        {/* 최근 예측 결과 */}
-        <Card className="col-span-3">
-          <CardHeader>
-            <CardTitle>최근 예측 시그널</CardTitle>
-            <CardDescription>RSI/MACD 기반 매매 신호 (실시간)</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="space-y-4">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <Skeleton key={i} className="h-8 w-full" />
-                ))}
+      {/* Footer */}
+      <footer className="bg-[#002B5B] text-white py-12 px-6">
+        <div className="max-w-6xl mx-auto">
+          <div className="grid md:grid-cols-4 gap-8 mb-8">
+            <div className="md:col-span-2">
+              <div className="flex items-center gap-2 mb-4">
+                {/* <div className="w-8 h-8 rounded-lg bg-[#00E5FF] flex items-center justify-center">
+                  <span className="font-bold text-[#002B5B]">S</span>
+                </div> */}
+                <Image
+                  src="/icon.png"
+                  alt="ETF Trading Logo"
+                  width={32}
+                  height={32}
+                  className="object-contain"
+                />
+                <span className="font-semibold">Snowballing AI ETF</span>
               </div>
-            ) : (
-              <div className="space-y-4">
-                {topPredictions.map((prediction) => (
-                  <div key={prediction.symbol} className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="font-semibold">{prediction.symbol}</div>
-                      <Badge
-                        variant={
-                          prediction.signal === "BUY" ? "default" :
-                            prediction.signal === "SELL" ? "destructive" : "secondary"
-                        }
-                        className={prediction.signal === "BUY" ? "bg-green-600" : ""}
-                      >
-                        {prediction.signal === "BUY" ? "매수" : prediction.signal === "SELL" ? "매도" : "관망"}
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="text-muted-foreground">신뢰도</span>
-                      <span className="font-medium">{prediction.confidence}%</span>
-                      {prediction.predictedChange >= 0 ? (
-                        <ArrowUp className="h-4 w-4 text-green-600" />
-                      ) : (
-                        <ArrowDown className="h-4 w-4 text-red-600" />
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* 보유 종목 현황 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>보유 종목 현황</CardTitle>
-          <CardDescription>현재 포트폴리오 상위 종목 (더미 데이터)</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {topHoldings.map((item) => (
-              <div key={item.symbol} className="flex items-center justify-between border-b pb-3 last:border-0">
-                <div>
-                  <div className="font-semibold">{item.symbol}</div>
-                  <div className="text-sm text-muted-foreground">{item.name}</div>
-                </div>
-                <div className="text-right">
-                  <div className="font-medium">${item.totalValue.toLocaleString()}</div>
-                  <div className={`text-sm ${item.profit >= 0 ? "text-green-600" : "text-red-600"}`}>
-                    {item.profit >= 0 ? "+" : ""}{item.profitPercent.toFixed(2)}% ({item.profit >= 0 ? "+" : ""}${item.profit.toLocaleString()})
-                  </div>
-                </div>
-              </div>
-            ))}
+              <p className="text-gray-400 text-sm max-w-md">
+                AI 기반 수익률 예측과 규제 대응 설계를 완료한 차세대 Active ETF 솔루션입니다.
+                데이터가 증명하는 투명한 운용을 약속합니다.
+              </p>
+            </div>
+            <div>
+              <h4 className="font-semibold mb-4">서비스</h4>
+              <ul className="space-y-2 text-gray-400 text-sm">
+                <li>
+                  <Link href="/dashboard" className="hover:text-[#00E5FF]">
+                    대시보드
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/predictions" className="hover:text-[#00E5FF]">
+                    예측 결과
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/portfolio" className="hover:text-[#00E5FF]">
+                    포트폴리오
+                  </Link>
+                </li>
+                <li>
+                  <Link href="/factsheet" className="hover:text-[#00E5FF]">
+                    팩트시트
+                  </Link>
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-semibold mb-4">정보</h4>
+              <ul className="space-y-2 text-gray-400 text-sm">
+                <li>
+                  <Link href="/returns" className="hover:text-[#00E5FF]">
+                    수익률 분석
+                  </Link>
+                </li>
+              </ul>
+            </div>
           </div>
-        </CardContent>
-      </Card>
+          <div className="border-t border-white/10 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
+            <p className="text-gray-400 text-sm">
+              &copy; 2025 Snowballing AI ETF. All rights reserved.
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={scrollToTop}
+              className="text-gray-400 hover:text-[#00E5FF]"
+            >
+              <ArrowUp className="w-4 h-4 mr-2" />
+              맨 위로
+            </Button>
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }

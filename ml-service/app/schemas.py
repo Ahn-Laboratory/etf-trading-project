@@ -52,6 +52,7 @@ class PredictionResponse(BaseModel):
     rsi_value: Optional[float] = None
     macd_value: Optional[float] = None
     actual_close: Optional[float] = None
+    actual_return: Optional[float] = None
     is_correct: Optional[bool] = None
 
     class Config:
@@ -133,3 +134,56 @@ class FactsheetGenerateResponse(BaseModel):
     success: bool
     message: str
     snapshot: Optional[ETFMonthlySnapshotResponse] = None
+
+
+# Prediction History Schemas
+class PredictionHistoryRequest(BaseModel):
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    symbol: Optional[str] = None
+
+
+class PredictionWithPerformance(BaseModel):
+    id: int
+    symbol: str
+    prediction_date: datetime
+    target_date: datetime
+    current_close: float
+    predicted_close: float
+    predicted_direction: str
+    confidence: float
+    rsi_value: Optional[float] = None
+    macd_value: Optional[float] = None
+    actual_close: Optional[float] = None
+    actual_return: Optional[float] = None
+    is_correct: Optional[bool] = None
+    days_elapsed: int = 0
+    has_performance: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class PredictionHistoryResponse(BaseModel):
+    count: int
+    predictions: list[PredictionWithPerformance]
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+
+# Candlestick Forecast Schemas
+class CandlestickData(BaseModel):
+    time: str  # ISO format date string
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class CandlestickForecastResponse(BaseModel):
+    symbol: str
+    current_price: float
+    forecast_days: int
+    data: list[CandlestickData]
+    generated_at: datetime

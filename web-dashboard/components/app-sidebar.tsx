@@ -27,7 +27,7 @@ import {
 const menuItems = [
   {
     title: "대시보드",
-    url: "/",
+    url: "/dashboard",
     icon: Home,
   },
   {
@@ -80,7 +80,7 @@ export function AppSidebar() {
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     render={<Link href={item.url} />}
-                    isActive={pathname === item.url}
+                    isActive={pathname === item.url || (item.url === "/dashboard" && pathname === "/")}
                   >
                     <item.icon className="h-4 w-4" />
                     <span>{item.title}</span>

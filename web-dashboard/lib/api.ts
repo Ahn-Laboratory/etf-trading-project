@@ -275,3 +275,126 @@ export async function generateAllFactsheets(years?: number[]): Promise<{
 
   return response.json()
 }
+
+
+// =====================================================
+// Prediction History & Forecast API
+// =====================================================
+
+// 예측 히스토리 아이템 타입
+export interface PredictionHistoryItem {
+  id: number
+  symbol: string
+  prediction_date: string
+  target_date: string
+  current_close: number
+  predicted_close: number
+  predicted_direction: "UP" | "DOWN"
+  confidence: number
+  rsi_value: number
+  macd_value: number
+  actual_close: number | null
+  actual_return: number | null
+  is_correct: boolean | null
+  days_elapsed: number
+  has_performance: boolean
+}
+
+// 예측 히스토리 응답 타입
+export interface PredictionHistoryResponse {
+  count: number
+  predictions: PredictionHistoryItem[]
+  start_date?: string
+  end_date?: string
+}
+
+// 캔들스틱 데이터 타입
+export interface CandlestickDataItem {
+  time: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+// 캔들스틱 예측 응답 타입
+export interface CandlestickForecastResponse {
+  symbol: string
+  current_price: number
+  forecast_days: number
+  data: CandlestickDataItem[]
+  generated_at: string
+}
+
+// 예측 히스토리 조회
+export async function fetchPredictionHistory(
+  symbol?: string,
+  days: number = 90
+): Promise<PredictionHistoryItem[]> {
+  try {
+    const params = new URLSearchParams()
+    if (symbol) params.append("symbol", symbol)
+    params.append("days", days.toString())
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/predictions/history?${params.toString()}`,
+      { cache: "no-store" }
+    )
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`)
+    }
+
+    const data: PredictionHistoryResponse = await response.json()
+    return data.predictions
+  } catch (error) {
+    console.error("Failed to fetch prediction history:", error)
+    throw error
+  }
+}
+
+// 캔들스틱 예측 데이터 조회
+export async function fetchCandlestickForecast(
+  symbol: string,
+  days: number = 90,
+  currentPrice?: number
+): Promise<CandlestickForecastResponse> {
+  try {
+    const params = new URLSearchParams()
+    params.append("days", days.toString())
+    if (currentPrice) params.append("current_price", currentPrice.toString())
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/predictions/forecast/${symbol}?${params.toString()}`,
+      { cache: "no-store" }
+    )
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`)
+    }
+
+    return response.json()
+  } catch (error) {
+    console.error(`Failed to fetch candlestick forecast for ${symbol}:`, error)
+    throw error
+  }
+}
+
+// 종목 정보 조회 (임시 - 더미 데이터)
+export function getStockInfo(symbol: string): { name: string; sector: string } {
+  const stockInfo: Record<string, { name: string; sector: string }> = {
+    AAPL: { name: "Apple Inc.", sector: "Technology" },
+    MSFT: { name: "Microsoft Corp.", sector: "Technology" },
+    GOOGL: { name: "Alphabet Inc.", sector: "Technology" },
+    AMZN: { name: "Amazon.com Inc.", sector: "Consumer Cyclical" },
+    NVDA: { name: "NVIDIA Corp.", sector: "Technology" },
+    META: { name: "Meta Platforms Inc.", sector: "Technology" },
+    TSLA: { name: "Tesla Inc.", sector: "Consumer Cyclical" },
+    JPM: { name: "JPMorgan Chase", sector: "Financial" },
+    V: { name: "Visa Inc.", sector: "Financial" },
+    JNJ: { name: "Johnson & Johnson", sector: "Healthcare" },
+  }
+
+  return stockInfo[symbol] || { name: `${symbol} Inc.`, sector: "Unknown" }
+}

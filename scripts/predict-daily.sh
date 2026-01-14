@@ -1,6 +1,7 @@
 #!/bin/bash
 # 매일 전체 종목 예측 실행 스크립트
-# cron: 0 8 * * * /Users/jeong-uchang/etf-trading-project/scripts/predict-daily.sh
+# 미국 정규장 마감 후 실행 (5 PM ET = 22:00 UTC, 월~금)
+# cron: 0 22 * * 1-5 /path/to/scripts/predict-daily.sh
 
 # PATH 설정 (cron 환경용)
 export PATH="/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$PATH"

@@ -1,60 +1,129 @@
 #!/bin/bash
 # ETF Trading Pipeline - 원클릭 시작 스크립트 (Nginx 포함)
+# macOS (Docker Desktop) 및 Linux 모두 지원
 
 cd "$(dirname "$0")"
 
 echo "🚀 ETF Trading Pipeline 시작..."
 
-# Docker 권한 확인
-if ! docker ps >/dev/null 2>&1; then
-    echo "❌ Docker 권한 오류 발생"
-    echo ""
-    echo "💡 해결 방법:"
-    echo ""
-    
-    # docker 그룹 확인
-    if groups | grep -q docker; then
-        echo "   ✅ 사용자가 docker 그룹에 포함되어 있습니다."
-        echo "   🔄 그룹 변경사항이 아직 적용되지 않았습니다."
-        echo ""
-        echo "   다음 중 하나를 실행하세요:"
-        echo "   1. newgrp docker"
-        echo "   2. 재로그인"
-        echo ""
-        echo "   그 다음:"
-        echo "   ./start.sh"
-    else
-        echo "   ❌ 사용자가 docker 그룹에 포함되어 있지 않습니다."
-        echo ""
-        echo "   다음 명령을 실행하여 docker 그룹에 추가하세요:"
-        echo "   sudo usermod -aG docker $USER"
-        echo ""
-        echo "   그 다음 다음 중 하나를 실행:"
-        echo "   1. newgrp docker  # 권장"
-        echo "   2. 재로그인"
-        echo ""
-        echo "   확인:"
-        echo "   groups | grep docker"
-        echo "   docker ps"
-        echo ""
-        echo "   또는 임시로 sudo 사용 (권장하지 않음):"
-        echo "   sudo ./start.sh"
+# OS 감지
+OS_NAME=$(uname)
+
+# Docker 실행 확인 및 권한 체크
+check_docker() {
+    # Docker 명령어 존재 확인
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "❌ Docker가 설치되어 있지 않습니다."
+        if [ "$OS_NAME" = "Darwin" ]; then
+            echo "💡 macOS: Docker Desktop을 설치하세요"
+            echo "   https://www.docker.com/products/docker-desktop/"
+        else
+            echo "💡 Linux: Docker를 설치하세요"
+            echo "   curl -fsSL https://get.docker.com | sh"
+        fi
+        exit 1
     fi
-    echo ""
-    exit 1
-fi
+
+    # Docker 데몬 실행 확인 (docker ps로 실제 연결 테스트)
+    echo "🔍 Docker 연결 확인 중..."
+
+    if ! docker ps >/dev/null 2>&1; then
+        if [ "$OS_NAME" = "Darwin" ]; then
+            # macOS: Docker Desktop이 실행 중인지 확인
+            echo "⚠️  Docker Desktop에 연결할 수 없습니다."
+
+            # Docker Desktop 자동 시작 시도
+            if [ -d "/Applications/Docker.app" ]; then
+                echo "🔄 Docker Desktop 시작 중..."
+                open -a Docker
+
+                # Docker가 준비될 때까지 대기 (최대 60초)
+                echo -n "   Docker Desktop 준비 대기 중"
+                for i in $(seq 1 60); do
+                    if docker ps >/dev/null 2>&1; then
+                        echo ""
+                        echo "   ✅ Docker Desktop 준비 완료"
+                        return 0
+                    fi
+                    echo -n "."
+                    sleep 1
+                done
+                echo ""
+                echo "❌ Docker Desktop 시작 시간 초과"
+                echo ""
+                echo "💡 해결 방법:"
+                echo "   1. Docker Desktop이 완전히 시작될 때까지 기다리세요"
+                echo "   2. 메뉴바에서 Docker 아이콘이 'Docker Desktop is running' 상태인지 확인"
+                echo "   3. 다시 ./start.sh 실행"
+            else
+                echo "❌ Docker Desktop이 설치되어 있지 않습니다."
+                echo "💡 https://www.docker.com/products/docker-desktop/ 에서 설치하세요"
+            fi
+        else
+            # Linux: Docker 데몬 또는 권한 문제
+            echo "❌ Docker 데몬에 연결할 수 없습니다."
+            echo ""
+            echo "💡 해결 방법:"
+            echo ""
+
+            # systemd로 docker 서비스 확인
+            if command -v systemctl >/dev/null 2>&1; then
+                if ! systemctl is-active --quiet docker 2>/dev/null; then
+                    echo "   Docker 서비스가 실행되지 않습니다. 시작하세요:"
+                    echo "   sudo systemctl start docker"
+                    echo ""
+                fi
+            fi
+
+            # docker 그룹 확인
+            if getent group docker >/dev/null 2>&1; then
+                if groups | grep -q docker; then
+                    echo "   ✅ 사용자가 docker 그룹에 포함되어 있습니다."
+                    echo "   🔄 그룹 변경사항이 아직 적용되지 않았을 수 있습니다."
+                    echo ""
+                    echo "   다음 중 하나를 실행하세요:"
+                    echo "   1. newgrp docker  # 현재 세션에 즉시 적용"
+                    echo "   2. 재로그인       # 새 세션에서 적용"
+                    echo ""
+                    echo "   그 다음 다시: ./start.sh"
+                else
+                    echo "   ❌ 사용자가 docker 그룹에 포함되어 있지 않습니다."
+                    echo ""
+                    echo "   다음 명령을 실행하여 docker 그룹에 추가하세요:"
+                    echo "   sudo usermod -aG docker $USER"
+                    echo ""
+                    echo "   그 다음:"
+                    echo "   newgrp docker  # 또는 재로그인"
+                    echo "   ./start.sh"
+                fi
+            else
+                echo "   Docker 그룹이 존재하지 않습니다."
+                echo "   Docker가 올바르게 설치되었는지 확인하세요."
+            fi
+            echo ""
+            echo "   또는 임시로 sudo 사용:"
+            echo "   sudo ./start.sh"
+        fi
+        echo ""
+        exit 1
+    fi
+
+    echo "✅ Docker 준비 완료"
+}
+
+# Docker 확인 실행
+check_docker
 
 # 1. SSH 터널 시작 (이미 있으면 스킵)
-# OS에 따라 바인딩 주소 결정
-OS_NAME=$(uname)
+# OS에 따라 바인딩 주소 결정 (OS_NAME은 위에서 이미 설정됨)
 if [ "$OS_NAME" = "Darwin" ]; then
     # macOS: Docker Desktop이 호스트의 localhost 포워딩을 처리하므로 127.0.0.1 사용
     BIND_ADDRESS="127.0.0.1"
-    echo "🍎 macOS 감지: SSH 터널을 localhost($BIND_ADDRESS)에 바인딩"
+    echo "🍎 macOS: SSH 터널을 localhost($BIND_ADDRESS)에 바인딩"
 else
     # Linux: Docker 컨테이너가 host.docker.internal로 접근하려면 호스트 IP(혹은 0.0.0.0)에 바인딩 필요
     BIND_ADDRESS="0.0.0.0"
-    echo "🐧 Linux 감지: SSH 터널을 모든 인터페이스($BIND_ADDRESS)에 바인딩"
+    echo "🐧 Linux: SSH 터널을 모든 인터페이스($BIND_ADDRESS)에 바인딩"
 fi
 
 if ! pgrep -f "ssh.*3306:127.0.0.1:5100" > /dev/null; then
@@ -93,23 +162,46 @@ done
 # 3. Docker Compose로 서비스 시작
 echo "🐳 Docker 컨테이너 시작 중..."
 
+# Docker 연결 재확인 (compose 실행 전)
+if ! docker ps >/dev/null 2>&1; then
+    echo "❌ Docker 연결이 끊어졌습니다. 다시 시도하세요."
+    exit 1
+fi
+
 # Docker Compose v2 찾기 (PATH 또는 직접 경로)
 DOCKER_COMPOSE_CMD=""
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 2>&1; then
+if docker compose version >/dev/null 2>&1; then
     DOCKER_COMPOSE_CMD="docker compose"
 elif [ -f "$HOME/.docker/cli-plugins/docker-compose" ] && "$HOME/.docker/cli-plugins/docker-compose" version >/dev/null 2>&1; then
     DOCKER_COMPOSE_CMD="$HOME/.docker/cli-plugins/docker-compose"
 else
     echo "❌ Docker Compose v2를 찾을 수 없습니다"
-    echo "💡 Docker Compose v2 설치 필요:"
-    echo "   mkdir -p ~/.docker/cli-plugins"
-    echo "   wget -O ~/.docker/cli-plugins/docker-compose https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-x86_64"
-    echo "   chmod +x ~/.docker/cli-plugins/docker-compose"
+    if [ "$OS_NAME" = "Darwin" ]; then
+        echo "💡 Docker Desktop에 포함되어 있어야 합니다. Docker Desktop을 재설치해보세요."
+    else
+        echo "💡 Docker Compose v2 설치 필요:"
+        echo "   mkdir -p ~/.docker/cli-plugins"
+        echo "   wget -O ~/.docker/cli-plugins/docker-compose https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-x86_64"
+        echo "   chmod +x ~/.docker/cli-plugins/docker-compose"
+    fi
     exit 1
 fi
 
 echo "   사용할 명령: $DOCKER_COMPOSE_CMD"
-$DOCKER_COMPOSE_CMD up -d --build
+
+# Docker Compose 실행
+if ! $DOCKER_COMPOSE_CMD up -d --build; then
+    echo ""
+    echo "❌ Docker Compose 실행 실패"
+    echo ""
+    echo "💡 문제 해결:"
+    if [ "$OS_NAME" = "Darwin" ]; then
+        echo "   1. Docker Desktop이 완전히 시작되었는지 확인"
+        echo "   2. Docker Desktop > Settings > Resources 에서 메모리/CPU 확인"
+    fi
+    echo "   3. 로그 확인: $DOCKER_COMPOSE_CMD logs"
+    exit 1
+fi
 
 # 4. 헬스체크 대기 (Nginx를 통해 포트 80으로)
 echo "⏳ 서비스 준비 대기 중..."

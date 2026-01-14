@@ -1,0 +1,57 @@
+{
+  "year": 2020,
+  "timestamp": "2026-01-13T12:37:18.858865",
+  "features": 150,
+  "models": {
+    "xgboost": {
+      "config": "xgb_d10_lr015_n1500",
+      "params": {
+        "n_estimators": 1500,
+        "max_depth": 10,
+        "learning_rate": 0.015,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_alpha": 0.2,
+        "reg_lambda": 0.2,
+        "min_child_weight": 3
+      },
+      "submission_file": "/Users/jeong-uchang/etf-trading-project/etf-model/submissions/tuning_xgb_d10_lr015_n1500/2020.xgb_d10_lr015_n1500.20260113_124602.submission.csv",
+      "training_time_sec": 11.1,
+      "status": "success",
+      "score": 0.15925
+    },
+    "catboost": {
+      "config": "cb_d10_lr015_n1500",
+      "params": {
+        "iterations": 1500,
+        "depth": 10,
+        "learning_rate": 0.015,
+        "l2_leaf_reg": 5.0,
+        "subsample": 0.8,
+        "border_count": 254,
+        "random_strength": 0.5
+      },
+      "submission_file": "/Users/jeong-uchang/etf-trading-project/etf-model/submissions/tuning_cb_d10_lr015_n1500/2020.cb_d10_lr015_n1500.20260113_124613.submission.csv",
+      "training_time_sec": 11.03,
+      "status": "success",
+      "score": 0.14561
+    },
+    "random_forest": {
+      "config": "rf_d20_n1000_mf03",
+      "params": {
+        "n_estimators": 1000,
+        "max_depth": 20,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": 0.3
+      },
+      "submission_file": "/Users/jeong-uchang/etf-trading-project/etf-model/submissions/tuning_rf_d20_n1000_mf03/2020.rf_d20_n1000_mf03.20260113_124624.submission.csv",
+      "training_time_sec": 167.58,
+      "status": "success",
+      "score": 0.20198
+    }
+  },
+  "data_load_time_sec": 523.42,
+  "server_status": "ok",
+  "average_score": 0.16894666666666666
+}
