@@ -57,6 +57,7 @@ class EnsembleExperimentPipeline:
         model_names: List[str],
         strategy: str = 'rank_avg',
         model_params: Optional[Dict[str, Dict]] = None,
+        model_features: Optional[Dict[str, int]] = None,
         data_dir: Path = DATA_DIR,
         output_dir: Path = SUBMISSIONS_DIR,
         max_features: int = 100,
@@ -72,9 +73,10 @@ class EnsembleExperimentPipeline:
             model_names: List of model names to ensemble
             strategy: Combination strategy ('prediction_avg', 'rank_avg', 'weighted', 'borda')
             model_params: Per-model hyperparameters
+            model_features: Per-model feature counts (e.g., {'tabpfn': 100, 'random_forest': 150})
             data_dir: Data directory
             output_dir: Output directory for submissions
-            max_features: Maximum number of features to select
+            max_features: Maximum number of features to select (default for models not in model_features)
             max_train_samples: Maximum training samples
             pred_chunk_size: Chunk size for batch prediction
             timestamp: Timestamp for submission filename
@@ -83,6 +85,7 @@ class EnsembleExperimentPipeline:
         self.model_names = model_names
         self.strategy = strategy
         self.model_params = model_params or {}
+        self.model_features = model_features or {}
         self.data_dir = data_dir
         self.output_dir = output_dir / f"ensemble_{ensemble_name}"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -378,15 +381,23 @@ class EnsembleExperimentPipeline:
         pred_start_ts = pd.Timestamp(f"{pred_year}-01-01")
         feature_sel_cutoff = pred_start_ts - pd.Timedelta(days=95)
 
+        # Select features for each model (different feature counts)
+        max_feature_count = max(
+            [self.model_features.get(m, self.max_features) for m in self.model_names]
+        )
         if verbose:
-            print(f"\nSelecting top {self.max_features} features...")
+            print(f"\nSelecting top {max_feature_count} features (max across models)...")
             print(f"  Using data prior to {feature_sel_cutoff.date()}")
+            for m in self.model_names:
+                feat_count = self.model_features.get(m, self.max_features)
+                print(f"  {m}: {feat_count} features")
 
         history_panel = panel[panel['date'] <= feature_sel_cutoff]
         if len(history_panel) < 1000:
             history_panel = panel[panel['date'] < pred_start_ts]
 
-        self.selected_features = self._select_features(history_panel, self.max_features)
+        # Select max features needed (individual models will use subset)
+        self.selected_features = self._select_features(history_panel, max_feature_count)
         if verbose:
             print(f"Selected {len(self.selected_features)} features")
             print(f"Top 5: {self.selected_features[:5]}")
@@ -422,16 +433,24 @@ class EnsembleExperimentPipeline:
         print(f"\n--- Training {len(self.model_names)} models ---")
 
         for model_name in self.model_names:
-            print(f"\n[{model_name}]")
+            # Get model-specific feature count
+            model_feat_count = self.model_features.get(model_name, self.max_features)
+            model_features = self.selected_features[:model_feat_count]
+            
+            print(f"\n[{model_name}] (features: {len(model_features)})")
             model_start = time.time()
+
+            # Prepare model-specific training data
+            X_train_model = X_train[model_features]
+            X_valid_model = X_valid[model_features] if X_valid is not None else None
 
             params = self.model_params.get(model_name, {})
             model = create_model(model_name, params)
-            model.fit(X_train, y_train, X_valid, y_valid, self.selected_features)
+            model.fit(X_train_model, y_train, X_valid_model, y_valid, model_features)
 
             # Validation score
-            if X_valid is not None:
-                val_preds = model.predict(X_valid)
+            if X_valid_model is not None:
+                val_preds = model.predict(X_valid_model)
                 corr, _ = spearmanr(val_preds, y_valid)
                 corr = corr if not np.isnan(corr) else 0.0
                 validation_scores[model_name] = max(0.0, corr)
@@ -447,7 +466,7 @@ class EnsembleExperimentPipeline:
             for i in range(n_chunks):
                 start_idx = i * chunk_size
                 end_idx = min((i + 1) * chunk_size, len(X_pred_all))
-                X_chunk = X_pred_all.iloc[start_idx:end_idx]
+                X_chunk = X_pred_all.iloc[start_idx:end_idx][model_features]
                 chunk_preds = model.predict(X_chunk)
                 predictions_list.append(chunk_preds)
 
@@ -593,7 +612,10 @@ def main():
     parser.add_argument('--year', type=int, nargs='+', default=None,
                         help='Prediction year(s)')
     parser.add_argument('--train-years', type=int, default=5)
-    parser.add_argument('--features', type=int, default=100)
+    parser.add_argument('--features', type=int, default=100,
+                        help='Default max features (used if model not in --model-features)')
+    parser.add_argument('--model-features', type=str, nargs='+', default=None,
+                        help='Per-model feature counts (format: model:count, e.g., tabpfn:100 random_forest:150)')
     parser.add_argument('--samples', type=int, default=50000)
     parser.add_argument('--chunk-size', type=int, default=5000)
     parser.add_argument('--timestamp', type=str, default=None)
@@ -603,10 +625,19 @@ def main():
 
     pred_years = args.year if args.year else [2020, 2021, 2022, 2023, 2024]
 
+    # Parse model-features
+    model_features = {}
+    if args.model_features:
+        for item in args.model_features:
+            if ':' in item:
+                model_name, feat_count = item.split(':')
+                model_features[model_name] = int(feat_count)
+
     pipeline = EnsembleExperimentPipeline(
         ensemble_name=args.name,
         model_names=args.models,
         strategy=args.strategy,
+        model_features=model_features,
         max_features=args.features,
         max_train_samples=args.samples,
         pred_chunk_size=args.chunk_size,
