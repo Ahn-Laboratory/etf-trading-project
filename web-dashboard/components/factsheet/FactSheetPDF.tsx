@@ -114,7 +114,7 @@ const styles = StyleSheet.create({
   },
   // Box Style
   infoBox: {
-    backgroundColor: "#FFF5E6",
+    backgroundColor: "#e6ecffff",
     padding: 10,
     borderRadius: 4,
     marginBottom: 10,
