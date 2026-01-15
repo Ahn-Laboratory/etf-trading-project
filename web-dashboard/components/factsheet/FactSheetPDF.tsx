@@ -34,7 +34,7 @@ const styles = StyleSheet.create({
   header: {
     marginBottom: 20,
     borderBottomWidth: 2,
-    borderBottomColor: "#FF6B00", // Orange accent
+    borderBottomColor: "#003264", // Orange accent
     borderStyle: "solid",
     paddingBottom: 10,
     flexDirection: "row",
@@ -54,7 +54,7 @@ const styles = StyleSheet.create({
   headerLogo: {
     fontSize: 14,
     fontFamily: "NanumBarunGothicBold",
-    color: "#FF6B00",
+    color: "#003264",
   },
   dateTag: {
     fontSize: 9,
@@ -69,7 +69,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 12,
     fontFamily: "NanumBarunGothicBold",
-    color: "#FF6B00",
+    color: "#003264",
     marginBottom: 6,
     borderBottomWidth: 0.5,
     borderBottomColor: "#CCCCCC",
@@ -97,7 +97,7 @@ const styles = StyleSheet.create({
     minHeight: 18,
   },
   tableHeader: {
-    backgroundColor: "#FFF5E6", // Light orange bg
+    backgroundColor: "#e6ecffff",
   },
   tableCellLabel: {
     flex: 2,
@@ -114,7 +114,7 @@ const styles = StyleSheet.create({
   },
   // Box Style
   infoBox: {
-    backgroundColor: "#FFF5E6",
+    backgroundColor: "#e6ecffff",
     padding: 10,
     borderRadius: 4,
     marginBottom: 10,
@@ -122,7 +122,7 @@ const styles = StyleSheet.create({
   infoBoxTitle: {
     fontSize: 10,
     fontFamily: "NanumBarunGothicBold",
-    color: "#FF6B00",
+    color: "#003264",
     marginBottom: 4,
   },
   infoBoxText: {

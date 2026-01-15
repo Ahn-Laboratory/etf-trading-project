@@ -63,7 +63,7 @@ export function TechSection() {
   return (
     <section
       ref={sectionRef}
-      className="py-24 px-6 bg-gradient-to-b from-muted/30 to-background"
+      className="py-24 px-6 bg-transparent"
     >
       <div className="max-w-6xl mx-auto">
         {/* Section Header */}
@@ -81,11 +81,10 @@ export function TechSection() {
           {techItems.map((item, index) => (
             <Card
               key={index}
-              className={`hover:border-[#00E5FF]/50 transition-all duration-500 ${
-                isVisible
-                  ? "opacity-100 translate-y-0"
-                  : "opacity-0 translate-y-8"
-              }`}
+              className={`hover:border-[#00E5FF]/50 transition-all duration-500 ${isVisible
+                ? "opacity-100 translate-y-0"
+                : "opacity-0 translate-y-8"
+                }`}
               style={{ transitionDelay: `${index * 100}ms` }}
             >
               <CardHeader className="pb-2">
@@ -117,9 +116,8 @@ export function TechSection() {
 
         {/* CTA Section */}
         <div
-          className={`text-center transition-all duration-700 ${
-            isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
-          }`}
+          className={`text-center transition-all duration-700 ${isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"
+            }`}
           style={{ transitionDelay: "400ms" }}
         >
           <Card className="bg-gradient-to-r from-[#002B5B] to-[#003366] border-0">
