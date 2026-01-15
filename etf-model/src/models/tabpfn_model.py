@@ -116,7 +116,10 @@ class TabPFNRankingModel:
         self,
         X_train: pd.DataFrame,
         y_train: pd.Series,
-        feature_names: Optional[List[str]] = None
+        X_valid: Optional[pd.DataFrame] = None,
+        y_valid: Optional[pd.Series] = None,
+        feature_names: Optional[List[str]] = None,
+        **kwargs
     ) -> 'TabPFNRankingModel':
         """
         Train the model
@@ -124,11 +127,16 @@ class TabPFNRankingModel:
         Args:
             X_train: Training features (cross-sectional data)
             y_train: Training targets (3-month forward returns)
+            X_valid: Validation features (unused - TabPFN is pretrained)
+            y_valid: Validation targets (unused - TabPFN is pretrained)
             feature_names: Feature names for tracking
+            **kwargs: Additional parameters (unused)
 
         Returns:
             self
         """
+        # Note: TabPFN is a pretrained model and does not use validation data
+        # X_valid and y_valid are accepted for API compatibility but ignored
         # Store feature names
         if feature_names is None:
             if hasattr(X_train, 'columns'):
