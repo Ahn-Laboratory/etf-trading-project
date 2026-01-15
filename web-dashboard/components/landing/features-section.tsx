@@ -89,7 +89,7 @@ export function FeaturesSection() {
           {features.map((feature, index) => (
             <Card
               key={index}
-              className={`bg-white/5 border-white/10 hover:border-[#00E5FF]/50 transition-all duration-700 ${isVisible
+              className={`hover:border-[#00E5FF]/50 transition-all duration-700 ${isVisible
                 ? "opacity-100 translate-y-0"
                 : "opacity-0 translate-y-8"
                 }`}
