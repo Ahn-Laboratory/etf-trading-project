@@ -64,7 +64,7 @@ export function TimelineSection() {
   return (
     <section
       ref={sectionRef}
-      className="py-24 px-6 bg-gradient-to-b from-background to-muted/30"
+      className="py-24 px-6"
     >
       <div className="max-w-4xl mx-auto">
         {/* Section Header */}
@@ -101,22 +101,20 @@ export function TimelineSection() {
               <div
                 key={index}
                 data-index={index}
-                className={`relative pl-20 transition-all duration-700 ${
-                  visibleItems.has(index)
-                    ? "opacity-100 translate-x-0"
-                    : "opacity-0 -translate-x-8"
-                }`}
+                className={`relative pl-20 transition-all duration-700 ${visibleItems.has(index)
+                  ? "opacity-100 translate-x-0"
+                  : "opacity-0 -translate-x-8"
+                  }`}
                 style={{ transitionDelay: `${index * 150}ms` }}
               >
                 {/* Timeline dot */}
                 <div
-                  className={`absolute left-6 w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                    item.status === "completed"
-                      ? "bg-[#00E5FF] border-[#00E5FF]"
-                      : item.status === "current"
+                  className={`absolute left-6 w-5 h-5 rounded-full border-2 flex items-center justify-center ${item.status === "completed"
+                    ? "bg-[#00E5FF] border-[#00E5FF]"
+                    : item.status === "current"
                       ? "bg-background border-[#00E5FF]"
                       : "bg-muted border-muted-foreground"
-                  }`}
+                    }`}
                 >
                   {item.status === "completed" ? (
                     <Check className="w-3 h-3 text-[#002B5B]" />
@@ -126,11 +124,10 @@ export function TimelineSection() {
                 </div>
 
                 <Card
-                  className={`${
-                    item.status === "current"
-                      ? "border-[#00E5FF]/50 bg-[#00E5FF]/5"
-                      : ""
-                  }`}
+                  className={`${item.status === "current"
+                    ? "border-[#00E5FF]/50 bg-[#00E5FF]/5"
+                    : ""
+                    }`}
                 >
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
