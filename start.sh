@@ -1,6 +1,6 @@
 #!/bin/bash
 # ETF Trading Pipeline - 원클릭 시작 스크립트 (Nginx 포함)
-# macOS (Docker Desktop) 및 Linux 모두 지원
+# macOS (Colima / Docker Desktop) 및 Linux 모두 지원
 #
 # 사용법:
 #   ./start.sh                    # 전체 서비스 빌드 및 시작 (기존 동작)
@@ -23,14 +23,52 @@ echo "🚀 ETF Trading Pipeline 시작..."
 # OS 감지
 OS_NAME=$(uname)
 
+# Colima 확인 및 시작 (macOS 전용)
+check_colima() {
+    if [ "$OS_NAME" != "Darwin" ]; then
+        return 0
+    fi
+
+    if ! command -v colima >/dev/null 2>&1; then
+        return 0  # colima 설치 안 됨
+    fi
+
+    echo "🍎 Colima 감지됨"
+
+    # Colima 실행 상태 확인
+    if ! colima status >/dev/null 2>&1; then
+        echo "🔄 Colima 시작 중..."
+        colima start --runtime docker
+
+        # Colima가 준비될 때까지 대기 (최대 60초)
+        echo -n "   Colima 준비 대기 중"
+        for i in $(seq 1 60); do
+            if docker ps >/dev/null 2>&1; then
+                echo ""
+                echo "   ✅ Colima 준비 완료"
+                return 0
+            fi
+            echo -n "."
+            sleep 1
+        done
+        echo ""
+        echo "❌ Colima 시작 시간 초과"
+        return 1
+    else
+        echo "✅ Colima 이미 실행 중"
+        return 0
+    fi
+}
+
 # Docker 실행 확인 및 권한 체크
 check_docker() {
     # Docker 명령어 존재 확인
     if ! command -v docker >/dev/null 2>&1; then
         echo "❌ Docker가 설치되어 있지 않습니다."
         if [ "$OS_NAME" = "Darwin" ]; then
-            echo "💡 macOS: Docker Desktop을 설치하세요"
-            echo "   https://www.docker.com/products/docker-desktop/"
+            echo "💡 macOS: Colima 또는 Docker Desktop을 설치하세요"
+            echo "   Colima: brew install colima (권장)"
+            echo "   Docker Desktop: https://www.docker.com/products/docker-desktop/"
         else
             echo "💡 Linux: Docker를 설치하세요"
             echo "   curl -fsSL https://get.docker.com | sh"
@@ -43,8 +81,13 @@ check_docker() {
 
     if ! docker ps >/dev/null 2>&1; then
         if [ "$OS_NAME" = "Darwin" ]; then
-            # macOS: Docker Desktop이 실행 중인지 확인
-            echo "⚠️  Docker Desktop에 연결할 수 없습니다."
+            # macOS: Colima 또는 Docker Desktop 시작 시도
+            echo "⚠️  Docker에 연결할 수 없습니다."
+
+            # Colima 시작 시도
+            if check_colima; then
+                return 0
+            fi
 
             # Docker Desktop 자동 시작 시도
             if [ -d "/Applications/Docker.app" ]; then
@@ -71,7 +114,8 @@ check_docker() {
                 echo "   3. 다시 ./start.sh 실행"
             else
                 echo "❌ Docker Desktop이 설치되어 있지 않습니다."
-                echo "💡 https://www.docker.com/products/docker-desktop/ 에서 설치하세요"
+                echo "💡 Colima 설치 (권장): brew install colima"
+                echo "   또는 Docker Desktop: https://www.docker.com/products/docker-desktop/"
             fi
         else
             # Linux: Docker 데몬 또는 권한 문제
@@ -124,6 +168,11 @@ check_docker() {
 
     echo "✅ Docker 준비 완료"
 }
+
+# Colima 확인 및 실행 (macOS 전용)
+if [ "$OS_NAME" = "Darwin" ]; then
+    check_colima
+fi
 
 # Docker 확인 실행
 check_docker
@@ -206,8 +255,19 @@ echo "   사용할 명령: $DOCKER_COMPOSE_CMD"
 if [ $# -gt 0 ]; then
     echo ""
     echo "🎯 대상 서비스만 빌드: $@"
-    if ! $DOCKER_COMPOSE_CMD up -d --build "$@"; then
+
+    SERVICES="$@"
+    if [[ "$SERVICES" == *"web-dashboard"* ]]; then
+        echo "   📡 nginx도 함께 시작 (reverse proxy)"
+        SERVICES="$SERVICES nginx"
+    fi
+
+    if ! $DOCKER_COMPOSE_CMD up -d --build --no-deps $SERVICES; then
         REBUILD_ERROR=true
+    fi
+
+    if ! $DOCKER_COMPOSE_CMD start $(docker compose ps --services --filter "status=created"); then
+        true
     fi
 else
     if ! $DOCKER_COMPOSE_CMD up -d --build; then

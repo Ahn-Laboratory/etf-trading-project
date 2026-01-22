@@ -1,12 +1,24 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { createChart, ColorType, IChartApi, CandlestickData, Time, CandlestickSeries, HistogramSeries, LineStyle } from "lightweight-charts"
+import { createChart, ColorType, IChartApi, CandlestickData, Time, CandlestickSeries, HistogramSeries, LineStyle, LineSeries } from "lightweight-charts"
 
 export interface ReferenceLine {
   price: number
   color: string
   label: string
+}
+
+// Calculate simple moving average
+function calculateMovingAverage(data: CandlestickData<Time>[], period: number) {
+  const result: { time: Time; value: number }[] = []
+  for (let i = 0; i < data.length; i++) {
+    if (i < period - 1) continue
+    const slice = data.slice(i - period + 1, i + 1)
+    const avg = slice.reduce((sum, d) => sum + (d.close as number), 0) / period
+    result.push({ time: data[i].time, value: avg })
+  }
+  return result
 }
 
 interface CandlestickChartProps {
@@ -130,6 +142,24 @@ export function CandlestickChart({ data, height = 400, className = "", reference
     }))
 
     volumeSeries.setData(volumeData)
+
+    // Add moving averages (5, 20, 60, 120)
+    const maColors = [
+      { period: 5, color: "#3b82f6", label: "MA5" },    // Blue
+      { period: 20, color: "#f59e0b", label: "MA20" },   // Amber
+      { period: 60, color: "#8b5cf6", label: "MA60" },   // Purple
+      { period: 120, color: "#ec4899", label: "MA120" }, // Pink
+    ]
+
+    maColors.forEach(({ period, color, label }) => {
+      const maSeries = chart.addSeries(LineSeries, {
+        color: color,
+        lineWidth: 2,
+        title: label,
+      })
+      const maData = calculateMovingAverage(data, period)
+      maSeries.setData(maData)
+    })
 
     // Add reference lines
     if (referenceLines.length > 0) {

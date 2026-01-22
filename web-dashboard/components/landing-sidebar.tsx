@@ -45,7 +45,7 @@ export function LandingSidebar() {
     }, [])
 
     return (
-        <div className="fixed left-8 top-1/2 -translate-y-1/2 z-50 flex flex-col items-start gap-6 bg-transparent">
+        <div className="fixed left-8 top-1/2 -translate-y-1/2 z-50 hidden md:flex flex-col items-start gap-6 bg-transparent">
             {tocItems.map((item) => {
                 const isActive = activeId === item.id;
                 return (
