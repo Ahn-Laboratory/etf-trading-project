@@ -49,6 +49,113 @@ UPLOAD_TO_DB=true
 USE_EXISTING_TUNNEL=true
 ```
 
+## 자동화 파이프라인
+
+### 스크립트 구성
+
+```
+scripts/
+├── scrape-daily.sh       # 일일 데이터 수집 자동화
+├── validate_data.py      # 데이터 품질 검증
+└── setup-cron.sh         # cron 작업 설정
+```
+
+### scrape-daily.sh
+매일 미국 정규장 마감 후 자동으로 TradingView 데이터를 수집하는 스크립트.
+
+**주요 기능:**
+- SSH 터널 자동 확인 및 시작
+- Poetry 환경 자동 설정
+- Headless 모드로 스크래퍼 실행
+- 상세 로그 기록 (`logs/scraper-YYYYMMDD.log`)
+- 실행 시간 측정 및 성공/실패 리포트
+
+**실행:**
+```bash
+# 수동 실행
+./scripts/scrape-daily.sh
+
+# 로그 확인
+tail -f logs/scraper-$(date +%Y%m%d).log
+```
+
+### validate_data.py
+MySQL 데이터베이스의 데이터 품질을 검증하는 Python 스크립트.
+
+**검증 항목:**
+- 테이블 존재 여부
+- 최신 데이터 확인 (오늘/어제 데이터 존재)
+- NULL 값 비율 (임계값: 5%)
+- 중복 타임스탬프 검사
+- 가격 이상치 탐지 (0 이하, 50% 이상 급변)
+
+**실행:**
+```bash
+# Poetry 환경에서 실행
+cd data-scraping
+poetry run python ../scripts/validate_data.py
+
+# 검증 결과는 logs/validation_YYYYMMDD_HHMMSS.json에 저장
+```
+
+**결과 형식:**
+```json
+{
+  "timestamp": "2026-01-30T...",
+  "summary": {
+    "total_tables": 60,
+    "passed": 58,
+    "failed": 2,
+    "errors": 0,
+    "pass_rate": 0.967
+  },
+  "failed_tables": ["NVDA_1h", "AAPL_D"],
+  "tables": { ... }
+}
+```
+
+### Cron 설정
+
+**자동 설정:**
+```bash
+./scripts/setup-cron.sh
+```
+
+**수동 설정:**
+```bash
+crontab -e
+
+# 매일 오전 7시 (한국시간 기준, 미국 정규장 마감 후)
+# 월~금요일에만 실행
+0 22 * * 1-5 /home/ahnbi2/etf-trading-project/scripts/scrape-daily.sh
+```
+
+**Cron 작업 확인:**
+```bash
+crontab -l
+```
+
+### 로그 관리
+
+**로그 위치:**
+```
+logs/
+├── scraper-YYYYMMDD.log      # 일일 스크래핑 로그
+└── validation_YYYYMMDD_HHMMSS.json  # 데이터 검증 결과
+```
+
+**로그 조회:**
+```bash
+# 최근 스크래핑 로그
+tail -f logs/scraper-$(date +%Y%m%d).log
+
+# 어제 로그
+tail -100 logs/scraper-$(date -d "yesterday" +%Y%m%d).log
+
+# 최근 검증 결과
+ls -lt logs/validation_*.json | head -1 | xargs cat | jq '.summary'
+```
+
 ## 상세 문서
 
 전체 파이프라인 가이드: `.claude/skills/data-scraping-pipeline/skill.md`

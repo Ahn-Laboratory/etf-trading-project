@@ -20,6 +20,7 @@ CSV 다운로드 후 자동으로 DB에 업로드하는 기능을 추가한 스�
 - TRADINGVIEW_PASSWORD: TradingView 비밀번호
 - UPLOAD_TO_DB: DB 업로드 활성화 여부 (기본값: true)
 - USE_EXISTING_TUNNEL: 기존 SSH 터널 사용 여부 (기본값: true)
+- HEADLESS: Headless 모드 실행 여부 (기본값: false, 쿠키 있으면 자동 true)
 """
 
 import asyncio
@@ -193,6 +194,41 @@ class TradingViewScraper:
             with open(COOKIES_FILE, "w") as f:
                 json.dump(cookies, f)
             logger.info(f"쿠키 저장됨: {len(cookies)}개")
+
+    def check_cookie_expiry(self) -> bool:
+        """
+        쿠키 만료 여부 확인
+
+        Returns:
+            True if cookies are valid, False if expired or missing
+        """
+        if not COOKIES_FILE.exists():
+            return False
+
+        try:
+            with open(COOKIES_FILE, "r") as f:
+                cookies = json.load(f)
+
+            # 현재 시간 (Unix timestamp)
+            current_time = datetime.now().timestamp()
+
+            # 모든 쿠키 중 하나라도 만료되었는지 확인
+            for cookie in cookies:
+                # 'expires' 필드가 있는 경우만 체크
+                if "expires" in cookie:
+                    # expires는 Unix timestamp (초 단위)
+                    if cookie["expires"] < current_time:
+                        logger.warning(
+                            f"쿠키 만료됨: {cookie.get('name', 'unknown')}"
+                        )
+                        return False
+
+            logger.info("쿠키가 유효합니다.")
+            return True
+
+        except Exception as e:
+            logger.error(f"쿠키 확인 중 오류 발생: {e}")
+            return False
 
     async def login(self, username: str, password: str) -> bool:
         """
@@ -476,21 +512,30 @@ class TradingViewScraper:
             await self.page.keyboard.press("Escape")
             return None
 
-    async def process_single_stock(self, symbol: str) -> dict:
+    async def process_single_stock(self, symbol: str, max_retries: int = 3) -> dict:
         """
-        단일 종목에 대해 모든 시간대 데이터 수집
+        단일 종목에 대해 모든 시간대 데이터 수집 (재시도 로직 포함)
 
         Args:
             symbol: 종목 심볼
+            max_retries: 최대 재시도 횟수
 
         Returns:
             결과 딕셔너리 {period_name: file_path}
         """
         results = {}
 
-        # 심볼 선택
-        if not await self.search_and_select_symbol(symbol):
-            return results
+        # 심볼 선택 (재시도)
+        for attempt in range(max_retries):
+            if await self.search_and_select_symbol(symbol):
+                break
+            else:
+                if attempt < max_retries - 1:
+                    logger.warning(f"심볼 선택 실패 (시도 {attempt + 1}/{max_retries}). 재시도 중...")
+                    await asyncio.sleep(2)
+                else:
+                    logger.error(f"심볼 선택 최종 실패: {symbol}")
+                    return results
 
         # 각 시간대별로 데이터 수집
         for period in TIME_PERIODS:
@@ -499,32 +544,56 @@ class TradingViewScraper:
 
             logger.info(f"\n[{symbol}] {period_name} 데이터 수집 중...")
 
-            # 시간 단위 변경
-            if await self.change_time_period(button_text):
-                await asyncio.sleep(1)
+            # 시간 단위 변경 (재시도)
+            time_change_success = False
+            for attempt in range(max_retries):
+                if await self.change_time_period(button_text):
+                    time_change_success = True
+                    break
+                else:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"시간 단위 변경 실패 (시도 {attempt + 1}/{max_retries}). 재시도 중...")
+                        await asyncio.sleep(2)
 
-                # 데이터 다운로드
-                timeframe_code = self._get_timeframe_code(period_name)
-                filename = (
-                    f"{symbol}_{period_name}_{datetime.now().strftime('%Y%m%d')}.csv"
-                )
+            if not time_change_success:
+                logger.error(f"시간 단위 변경 최종 실패: {button_text}")
+                continue
+
+            await asyncio.sleep(1)
+
+            # 데이터 다운로드 (재시도)
+            timeframe_code = self._get_timeframe_code(period_name)
+            filename = (
+                f"{symbol}_{period_name}_{datetime.now().strftime('%Y%m%d')}.csv"
+            )
+
+            file_path = None
+            for attempt in range(max_retries):
                 file_path = await self.export_chart_data(filename)
-
                 if file_path:
-                    results[period_name] = str(file_path)
+                    break
+                else:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"다운로드 실패 (시도 {attempt + 1}/{max_retries}). 재시도 중...")
+                        await asyncio.sleep(2)
 
-                    if self.upload_to_db and self.db_service:
-                        try:
-                            rows = self.db_service.upload_csv(
-                                file_path, symbol, timeframe_code
-                            )
-                            logger.info(
-                                f"  [{symbol} - {period_name}] ✓ Uploaded {rows} rows to DB"
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"  [{symbol} - {period_name}] ✗ DB upload failed: {e}"
-                            )
+            if file_path:
+                results[period_name] = str(file_path)
+
+                if self.upload_to_db and self.db_service:
+                    try:
+                        rows = self.db_service.upload_csv(
+                            file_path, symbol, timeframe_code
+                        )
+                        logger.info(
+                            f"  [{symbol} - {period_name}] ✓ Uploaded {rows} rows to DB"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"  [{symbol} - {period_name}] ✗ DB upload failed: {e}"
+                        )
+            else:
+                logger.error(f"다운로드 최종 실패: {symbol} - {period_name}")
 
         return results
 
@@ -569,6 +638,32 @@ async def main():
     upload_to_db = os.getenv("UPLOAD_TO_DB", "true").lower() == "true"
     use_existing_tunnel = os.getenv("USE_EXISTING_TUNNEL", "true").lower() == "true"
 
+    # HEADLESS 환경변수 읽기 (기본값: false)
+    headless = os.getenv("HEADLESS", "false").lower() == "true"
+
+    # 쿠키 존재 및 만료 여부 확인
+    cookie_valid = False
+    if COOKIES_FILE.exists():
+        # 임시 스크래퍼 인스턴스로 쿠키 만료 체크
+        temp_scraper = TradingViewScraper(
+            headless=False, upload_to_db=False, use_existing_tunnel=False
+        )
+        cookie_valid = temp_scraper.check_cookie_expiry()
+
+    # 쿠키가 없거나 만료된 경우 headless 모드 비활성화
+    if headless and not cookie_valid:
+        if not COOKIES_FILE.exists():
+            logger.warning("쿠키 파일이 없습니다. headless 모드를 비활성화합니다.")
+        else:
+            logger.warning("쿠키가 만료되었습니다. headless 모드를 비활성화합니다.")
+        logger.warning("로그인 시 CAPTCHA 수동 해결이 필요하므로 브라우저 창을 띄웁니다.")
+        headless = False
+
+    # 쿠키가 유효하면 자동으로 headless 모드 활성화 (환경변수가 명시적으로 false가 아닌 경우)
+    if cookie_valid and os.getenv("HEADLESS") is None:
+        logger.info("쿠키 파일이 유효합니다. headless 모드를 자동으로 활성화합니다.")
+        headless = True
+
     if not username or not password:
         logger.warning("환경변수가 설정되지 않았습니다.")
         logger.warning(".env 파일에 다음 내용을 추가하세요:")
@@ -581,8 +676,12 @@ async def main():
     # 전체 리스트 사용
     test_symbols = STOCK_LIST
 
+    logger.info(f"Headless 모드: {headless}")
+    logger.info(f"DB 업로드: {upload_to_db}")
+    logger.info(f"기존 SSH 터널 사용: {use_existing_tunnel}")
+
     async with TradingViewScraper(
-        headless=False,
+        headless=headless,
         upload_to_db=upload_to_db,
         use_existing_tunnel=use_existing_tunnel,
     ) as scraper:
