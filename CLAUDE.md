@@ -78,8 +78,7 @@ http://ml-service:8000"| FASTAPI
 
 ### 전체 서비스 시작
 ```bash
-./start.sh              # SSH 터널 + Docker 서비스 시작
-cd web-dashboard && npm run dev  # 웹 대시보드 시작
+./start.sh              # SSH 터널 + Docker 서비스 시작 (모든 컨테이너 포함)
 ```
 
 ### 서비스 중지
@@ -105,7 +104,13 @@ docker-compose build    # 이미지 재빌드
 ssh -f -N -L 3306:127.0.0.1:5100 ahnbi2@ahnbi2.suwon.ac.kr
 ```
 
-### 웹 대시보드
+### 웹 대시보드 (Docker)
+```bash
+docker compose up -d web-dashboard    # 웹 대시보드 컨테이너 시작
+docker compose logs -f web-dashboard  # 로그 확인
+```
+
+### 웹 대시보드 (로컬 개발 - 선택사항)
 ```bash
 cd web-dashboard
 npm run dev             # 개발 서버 (http://localhost:3000)
@@ -130,9 +135,25 @@ Base URL: `http://localhost:8000`
 - `/batch` 엔드포인트가 `/{symbol}` 보다 먼저 선언되어야 함 (경로 충돌 방지)
 - 잘못된 순서시 "BATCH_D table not found" 에러 발생
 
+## Auto-Monitoring Dashboard
+
+Base URL: `http://ahnbi2.suwon.ac.kr/monitor`
+
+실시간 데이터 스크래핑 모니터링 대시보드. 스크래핑 진행 상황, 심볼별 상태, 에러를 실시간으로 확인할 수 있습니다.
+
+### 기능
+- 스크래핑 상태 (running/partial/completed/idle)
+- 진행률 표시 (완료된 심볼 수 / 전체)
+- 심볼별 상태 그리드 (색상으로 상태 표시)
+- 통계: 다운로드 수, 업로드 수, 총 행 수
+- 에러 목록
+
+### 로그 파일 위치
+`data-scraping/tradingview_scraper_upload.log`
+
 ## Web Dashboard
 
-Base URL: `http://localhost:3000`
+Base URL: `http://ahnbi2.suwon.ac.kr` (또는 로컬: `http://localhost:3000`)
 
 ### 페이지 구성
 | 경로 | 페이지 | 설명 |
@@ -216,6 +237,13 @@ etf-trading-project/
 │   ├── components/       # UI 컴포넌트
 │   ├── lib/              # API 연동, 데이터
 │   └── hooks/            # React 훅
+├── auto-monitoring/       # 스크래핑 모니터링 대시보드
+│   ├── app/              # Next.js 페이지
+│   ├── components/       # UI 컴포넌트
+│   └── lib/              # 로그 파서, 타입 정의
+├── data-scraping/         # TradingView 데이터 스크래퍼
+│   ├── tradingview_playwright_scraper_upload.py
+│   └── downloads/        # 다운로드된 CSV 파일
 ├── scripts/
 │   ├── predict-daily.sh   # 일일 예측 스크립트
 │   ├── train-monthly.sh   # 월간 학습 스크립트
