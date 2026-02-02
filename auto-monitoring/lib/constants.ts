@@ -57,15 +57,11 @@ export const REFRESH_INTERVALS = {
 
 // Log file paths (server-side only)
 // Docker에서는 /app/logs/scraper.log로 마운트됨
-// 로컬 개발시에는 원래 경로 사용
+// 환경변수 LOG_FILE_PATH가 있으면 사용, 없으면 기본값 사용
 export const LOG_PATHS = {
-  SCRAPER_LOG: process.env.NODE_ENV === 'production'
-    ? '/app/logs/scraper.log'
-    : '/home/ahnbi2/etf-trading-project/data-scraping/tradingview_scraper_upload.log',
-  DOWNLOADS_DIR: '/home/ahnbi2/etf-trading-project/data-scraping/downloads',
-  PIPELINE_LOG_DIR: process.env.NODE_ENV === 'production'
-    ? '/app/logs/pipeline'
-    : '/home/ahnbi2/etf-trading-project/logs',
+  SCRAPER_LOG: process.env.LOG_FILE_PATH || '/app/logs/scraper.log',
+  DOWNLOADS_DIR: '/app/downloads',
+  PIPELINE_LOG_DIR: '/app/logs/pipeline',
 } as const;
 
 // Status colors for UI

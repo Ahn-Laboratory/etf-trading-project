@@ -456,7 +456,7 @@ export async function parseScrapingLog(): Promise<ScrapingStatus> {
       }
     }
 
-    // Update symbol completion status
+    // Update symbol completion status and calculate duration
     const symbolsArray = Array.from(symbolsMap.values());
     for (const symbolStatus of symbolsArray) {
       const timeframeStatuses = Object.values(symbolStatus.timeframes).map(tf => tf.status);
@@ -469,10 +469,19 @@ export async function parseScrapingLog(): Promise<ScrapingStatus> {
         symbolStatus.completedAt = entries[entries.length - 1].timestamp;
       } else if (anyFailed && anySuccess) {
         symbolStatus.status = 'partial';
+        symbolStatus.completedAt = entries[entries.length - 1].timestamp;
       } else if (anyFailed) {
         symbolStatus.status = 'failed';
+        symbolStatus.completedAt = entries[entries.length - 1].timestamp;
       } else if (timeframeStatuses.some(s => s === 'downloading')) {
         symbolStatus.status = 'in_progress';
+      }
+
+      // Calculate duration if we have start and end times
+      if (symbolStatus.startedAt && symbolStatus.completedAt) {
+        const start = new Date(symbolStatus.startedAt);
+        const end = new Date(symbolStatus.completedAt);
+        symbolStatus.duration = Math.round((end.getTime() - start.getTime()) / 1000);
       }
     }
 
@@ -499,6 +508,14 @@ export async function parseScrapingLog(): Promise<ScrapingStatus> {
 
     const lastRun = entries.length > 0 ? entries[entries.length - 1].timestamp : null;
 
+    // Calculate total duration from session start to last entry
+    let totalDuration: number | undefined;
+    if (session?.startTime && lastRun) {
+      const start = new Date(session.startTime);
+      const end = new Date(lastRun);
+      totalDuration = Math.round((end.getTime() - start.getTime()) / 1000);
+    }
+
     return {
       status,
       lastRun,
@@ -518,6 +535,7 @@ export async function parseScrapingLog(): Promise<ScrapingStatus> {
       },
       symbols,
       errors: errors.slice(-50), // Keep last 50 errors
+      totalDuration,
     };
 
   } catch (error) {

@@ -25,6 +25,7 @@ export interface SymbolScrapingStatus {
   timeframes: Record<TimeframeCode, TimeframeResult>;
   startedAt?: string;
   completedAt?: string;
+  duration?: number; // Duration in seconds
 }
 
 export interface ScrapingProgress {
@@ -58,6 +59,7 @@ export interface ScrapingStatus {
   statistics: ScrapingStatistics;
   symbols: SymbolScrapingStatus[];
   errors: ScrapingError[];
+  totalDuration?: number; // Total duration in seconds
 }
 
 // Training types (dummy)
