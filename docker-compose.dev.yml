@@ -1,0 +1,21 @@
+# 개발용 오버라이드 설정
+# 사용법: docker compose -f docker-compose.yml -f docker-compose.dev.yml up auto-monitoring
+services:
+  auto-monitoring:
+    build:
+      context: ./auto-monitoring
+      dockerfile: Dockerfile.dev
+    environment:
+      - NODE_ENV=development
+      - LOG_FILE_PATH=/app/scraper-logs/tradingview_scraper_upload.log
+    volumes:
+      # 소스 코드만 마운트 (node_modules 제외)
+      - ./auto-monitoring/app:/app/app
+      - ./auto-monitoring/components:/app/components
+      - ./auto-monitoring/lib:/app/lib
+      - ./auto-monitoring/hooks:/app/hooks
+      - ./auto-monitoring/public:/app/public
+      # 로그 파일들 마운트
+      - ./data-scraping/logs:/app/logs:ro
+      - ./data-scraping:/app/scraper-logs:ro
+    command: npm run dev

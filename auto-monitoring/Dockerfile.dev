@@ -1,0 +1,17 @@
+FROM node:20-alpine
+
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# node_modules를 별도 레이어에 설치
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# 소스 복사 (볼륨 마운트 시 덮어씌워짐)
+COPY . .
+
+EXPOSE 3000
+
+# 시작 시 node_modules 없으면 설치
+CMD ["sh", "-c", "[ -d node_modules ] || npm ci; npm run dev"]
