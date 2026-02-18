@@ -11,12 +11,19 @@ Usage:
 
     # 전체 연도 실험
     python run_experiment.py --model ridge --year 2020 2021 2022 2023 2024
+
+    # AhnLab LGBM 모델 (lambdarank 기반, 특수 학습 파이프라인 사용)
+    python run_experiment.py --model ahnlab_lgbm --year 2024
+
+    # 사용 가능한 모델 목록 확인
+    python run_experiment.py --list
 """
 import argparse
 import sys
 import time
 import gc
 from pathlib import Path
+import pandas as pd
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -24,11 +31,46 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.models.factory import get_available_models
 
 
+def load_ahnlab_panel(
+    data_dir: Path = Path("data"),
+) -> pd.DataFrame:
+    """Load panel data from parquet or CSV.
+
+    Feature generation is handled by scraper-service's process_features.py.
+    This function only loads pre-built data files.
+
+    Args:
+        data_dir: Directory for parquet/csv files
+
+    Returns:
+        Panel DataFrame with features
+
+    Raises:
+        FileNotFoundError: If panel data not found
+    """
+    parquet_path = data_dir / "stock_panel_data.parquet"
+    csv_path = data_dir / "stock_panel_data.csv"
+
+    if parquet_path.exists():
+        print(f"Loading pre-downloaded panel data from {parquet_path}")
+        return pd.read_parquet(parquet_path)
+    elif csv_path.exists():
+        print(f"Loading pre-downloaded panel data from {csv_path}")
+        return pd.read_csv(csv_path, parse_dates=["date"])
+    else:
+        raise FileNotFoundError(
+            f"Pre-downloaded panel data not found in {data_dir}/\n"
+            f"To generate features, use scraper-service:\n"
+            f"  cd scraper-service && poetry run python scripts/process_features.py"
+        )
+
+
 def run_quick_test():
     """빠른 모델 테스트 (2024년만, 적은 피처)"""
     from src.experiment_pipeline import ExperimentPipeline
 
     # 테스트할 모델들 (sklearn 기반, 설치 필요 없음)
+    # Note: ahnlab_lgbm uses different training pipeline (fit_with_panel)
     models_to_test = ['ridge', 'random_forest']
 
     print("\n" + "="*60)
@@ -52,15 +94,31 @@ def run_quick_test():
         start = time.time()
 
         try:
-            pipeline = ExperimentPipeline(
-                model_name=model_name,
-                max_features=50,
-                max_train_samples=10000,
-                device='cpu',
-                pred_chunk_size=5000
-            )
+            if model_name == 'ahnlab_lgbm':
+                # Special handling for ahnlab_lgbm in quick test
+                from src.models.ahnlab_lgbm import AhnLabLGBMRankingModel
 
-            submission = pipeline.process_year(2024, train_years=3, verbose=True, panel=panel_2024)
+                # Try to use pre-downloaded data, fallback to loaded panel
+                try:
+                    ahnlab_panel = load_ahnlab_panel(use_pipeline=False)
+                except FileNotFoundError:
+                    print("  Warning: Using standard panel data instead of pre-downloaded data")
+                    ahnlab_panel = panel_2024
+
+                model = AhnLabLGBMRankingModel()
+                model.fit_with_panel(ahnlab_panel, pred_year=2024)
+                submission = model.predict_top_k_for_year(ahnlab_panel, 2024, k=100)
+            else:
+                # Standard pipeline
+                pipeline = ExperimentPipeline(
+                    model_name=model_name,
+                    max_features=50,
+                    max_train_samples=10000,
+                    device='cpu',
+                    pred_chunk_size=5000
+                )
+                submission = pipeline.process_year(2024, train_years=3, verbose=True, panel=panel_2024)
+
             elapsed = time.time() - start
 
             results[model_name] = {
@@ -128,51 +186,98 @@ def main():
     # Run specified experiments
     from src.experiment_pipeline import ExperimentPipeline
 
-    # Use first model as loader
-    loader = ExperimentPipeline(
-        model_name=args.model[0],
-        max_features=args.features,
-        max_train_samples=args.samples,
-        device='cpu'
-    )
-
     all_paths = {}
+
+    # Check if ahnlab_lgbm is in models to test
+    has_ahnlab = 'ahnlab_lgbm' in args.model
+
+    # For ahnlab_lgbm, load panel data
+    if has_ahnlab:
+        try:
+            print("\n>>> Loading pre-downloaded panel data for ahnlab_lgbm...")
+            ahnlab_panel = load_ahnlab_panel()
+            print(f"Panel loaded: {len(ahnlab_panel)} rows, columns: {list(ahnlab_panel.columns[:10])}...")
+        except (FileNotFoundError, ValueError) as e:
+            print(f"ERROR: {e}")
+            # Remove ahnlab_lgbm from models to test
+            args.model = [m for m in args.model if m != 'ahnlab_lgbm']
+            has_ahnlab = False
+
+    # Use first non-ahnlab model as loader for standard models
+    standard_models = [m for m in args.model if m != 'ahnlab_lgbm']
+    if standard_models:
+        loader = ExperimentPipeline(
+            model_name=standard_models[0],
+            max_features=args.features,
+            max_train_samples=args.samples,
+            device='cpu'
+        )
 
     for year in args.year:
         print(f"\n{'='*60}")
         print(f"Processing Year: {year}")
         print(f"{'='*60}")
 
-        # 1. Load data for this year
-        try:
-            panel = loader.load_data_for_year(year, train_years=5)
-        except Exception as e:
-            print(f"Error loading data for {year}: {e}")
-            continue
+        # 1. Load data for standard models (non-ahnlab)
+        panel = None
+        if standard_models:
+            try:
+                panel = loader.load_data_for_year(year, train_years=5)
+            except Exception as e:
+                print(f"Error loading data for {year}: {e}")
+                # Skip standard models but continue with ahnlab if available
+                if not has_ahnlab:
+                    continue
 
         # 2. Run all models on this data
         for model_name in args.model:
             print(f"\n>>> Running {model_name} for {year}")
-            
-            try:
-                pipeline = ExperimentPipeline(
-                    model_name=model_name,
-                    max_features=args.features,
-                    max_train_samples=args.samples,
-                    device='cpu'
-                )
 
-                paths = pipeline.run(
-                    pred_years=[year],
-                    train_years=5,
-                    verbose=True,
-                    panels={year: panel}
-                )
-                
-                # Collect results
-                if model_name not in all_paths:
-                    all_paths[model_name] = {}
-                all_paths[model_name].update(paths)
+            try:
+                if model_name == 'ahnlab_lgbm':
+                    # Special handling for ahnlab_lgbm
+                    from src.models.ahnlab_lgbm import AhnLabLGBMRankingModel
+
+                    model = AhnLabLGBMRankingModel()
+                    print(f"Training ahnlab_lgbm with panel data for year {year}...")
+                    model.fit_with_panel(ahnlab_panel, pred_year=year)
+
+                    # Generate predictions and save submission
+                    print(f"Generating predictions for {year}...")
+                    submission = model.predict_top_k_for_year(ahnlab_panel, year, k=100)
+
+                    # Save submission file
+                    output_dir = Path("submissions") / "ahnlab_lgbm"
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    output_path = output_dir / f"{year}.ahnlab_lgbm.submission.csv"
+                    submission.to_csv(output_path, index=False)
+                    print(f"Saved submission to {output_path}")
+
+                    # Collect results
+                    if model_name not in all_paths:
+                        all_paths[model_name] = {}
+                    all_paths[model_name][year] = str(output_path)
+
+                else:
+                    # Standard model pipeline
+                    pipeline = ExperimentPipeline(
+                        model_name=model_name,
+                        max_features=args.features,
+                        max_train_samples=args.samples,
+                        device='cpu'
+                    )
+
+                    paths = pipeline.run(
+                        pred_years=[year],
+                        train_years=5,
+                        verbose=True,
+                        panels={year: panel}
+                    )
+
+                    # Collect results
+                    if model_name not in all_paths:
+                        all_paths[model_name] = {}
+                    all_paths[model_name].update(paths)
 
             except Exception as e:
                 print(f"Error with {model_name} on {year}: {e}")
@@ -180,7 +285,8 @@ def main():
                 traceback.print_exc()
 
         # 3. Clean up
-        del panel
+        if panel is not None:
+            del panel
         gc.collect()
 
     print(f"\n{'='*60}")
