@@ -124,13 +124,16 @@ class TaskInfoManager:
                     self._job_info.model_dump_json(indent=2)
                 )
 
-    async def get_job_info(self) -> JobInfo:
+    async def get_job_info(self, reload: bool = True) -> JobInfo:
         """Get current job info.
+
+        Args:
+            reload: If True, reload from file to get latest state from background tasks
 
         Returns:
             JobInfo object
         """
-        if self._job_info is None:
+        if reload or self._job_info is None:
             await self.load()
         return self._job_info
 

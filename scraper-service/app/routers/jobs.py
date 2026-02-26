@@ -1,11 +1,15 @@
 """Job management router."""
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from datetime import datetime
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel
+from sqlalchemy import text
 
+from app.config import settings
 from app.models.task_info import task_info_manager, JobStatus, SymbolStatus
 from app.services.scraper import scraper, STOCK_LIST
+from app.services.db_service import DatabaseService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -33,10 +37,11 @@ class RetryRequest(BaseModel):
     symbols: List[str]
 
 
-async def run_scraping_job(symbols: List[str], is_retry: bool = False):
+async def run_scraping_job(symbols: List[str], is_retry: bool = False, job_id: str = None):
     """Background task to run scraping job."""
     try:
         async with scraper:
+            scraper.job_id = job_id
             await scraper.process_all_stocks(symbols, is_retry=is_retry)
     except Exception as e:
         logger.error(f"Scraping job failed: {e}")
@@ -54,11 +59,10 @@ async def start_full_job(background_tasks: BackgroundTasks):
             detail=f"Job already running: {job_info.job_id}"
         )
 
-    from datetime import datetime
     job_id = f"full_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     # job 초기화는 process_all_stocks 내부에서 수행됨
-    background_tasks.add_task(run_scraping_job, STOCK_LIST)
+    background_tasks.add_task(run_scraping_job, STOCK_LIST, False, job_id)
 
     return JobResponse(
         job_id=job_id,
@@ -137,23 +141,136 @@ async def cancel_job():
 
 
 @router.get("/logs")
-async def get_logs(limit: int = 100):
-    """Get recent log entries."""
-    from pathlib import Path
-    from app.config import settings
+async def get_logs(
+    limit: int = Query(100, description="Maximum number of log entries to return"),
+    job_id: str = Query(None, description="Filter by job ID"),
+    symbol: str = Query(None, description="Filter by symbol"),
+    level: str = Query(None, description="Filter by log level (DEBUG, INFO, WARNING, ERROR)"),
+    min_level: str = Query(None, description="Minimum log level (INFO = INFO, WARNING, ERROR)"),
+):
+    """
+    Get scraping log entries from database.
 
-    log_dir = Path(settings.log_dir)
-    logs = []
+    Returns logs from scraping_logs table with optional filters.
+    """
+    db_service = None
+    try:
+        db_service = DatabaseService()
+        db_service.connect()
 
-    # Find most recent log file
-    log_files = sorted(log_dir.glob("scraper_*.log"), reverse=True)
+        # Build query
+        query = """
+            SELECT id, job_id, timestamp, level, symbol, timeframe, message
+            FROM scraping_logs
+            WHERE 1=1
+        """
+        params = {}
 
-    if log_files:
-        try:
-            with open(log_files[0], "r") as f:
-                lines = f.readlines()
-                logs = lines[-limit:]
-        except Exception as e:
-            logger.error(f"Failed to read logs: {e}")
+        if job_id:
+            query += " AND job_id = :job_id"
+            params["job_id"] = job_id
 
-    return {"logs": logs, "log_file": str(log_files[0]) if log_files else None}
+        if symbol:
+            query += " AND symbol = :symbol"
+            params["symbol"] = symbol
+
+        if level:
+            query += " AND level = :level"
+            params["level"] = level
+
+        if min_level:
+            # Map level names to numeric values for comparison
+            level_order = {"DEBUG": 1, "INFO": 2, "WARNING": 3, "ERROR": 4, "CRITICAL": 5}
+            min_val = level_order.get(min_level.upper(), 2)
+            query += f" AND FIELD(level, 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL') >= {min_val}"
+
+        query += " ORDER BY timestamp DESC LIMIT :limit"
+        params["limit"] = limit
+
+        with db_service.engine.connect() as conn:
+            result = conn.execute(text(query), params)
+            rows = result.fetchall()
+
+        logs = [
+            {
+                "id": row.id,
+                "job_id": row.job_id,
+                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+                "level": row.level,
+                "symbol": row.symbol,
+                "timeframe": row.timeframe,
+                "message": row.message,
+            }
+            for row in rows
+        ]
+
+        return {
+            "logs": logs,
+            "count": len(logs),
+            "limit": limit,
+            "filters": {
+                "job_id": job_id,
+                "symbol": symbol,
+                "level": level,
+                "min_level": min_level,
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to query logs from DB: {e}")
+        return {"logs": [], "error": str(e)}
+    finally:
+        if db_service:
+            db_service.close()
+
+
+@router.get("/jobs")
+async def list_jobs(
+    limit: int = Query(10, description="Maximum number of jobs to return"),
+):
+    """
+    List recent scraping jobs based on log entries.
+
+    Returns distinct job_ids with their timestamp range and log count.
+    """
+    db_service = None
+    try:
+        db_service = DatabaseService()
+        db_service.connect()
+
+        query = """
+            SELECT
+                job_id,
+                MIN(timestamp) as start_time,
+                MAX(timestamp) as end_time,
+                COUNT(*) as log_count,
+                SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) as error_count
+            FROM scraping_logs
+            GROUP BY job_id
+            ORDER BY start_time DESC
+            LIMIT :limit
+        """
+
+        with db_service.engine.connect() as conn:
+            result = conn.execute(text(query), {"limit": limit})
+            rows = result.fetchall()
+
+        jobs = [
+            {
+                "job_id": row.job_id,
+                "start_time": row.start_time.isoformat() if row.start_time else None,
+                "end_time": row.end_time.isoformat() if row.end_time else None,
+                "log_count": row.log_count,
+                "error_count": row.error_count,
+            }
+            for row in rows
+        ]
+
+        return {"jobs": jobs, "count": len(jobs)}
+
+    except Exception as e:
+        logger.error(f"Failed to query jobs from DB: {e}")
+        return {"jobs": [], "error": str(e)}
+    finally:
+        if db_service:
+            db_service.close()

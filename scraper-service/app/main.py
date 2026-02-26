@@ -1,15 +1,26 @@
 """FastAPI application for scraper service."""
 import logging
+from datetime import datetime
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import health, jobs
+from app.routers import health, jobs, features
 
-# Configure logging
+# Configure logging with date-based file handler
+_log_dir = Path(settings.log_dir)
+_log_dir.mkdir(parents=True, exist_ok=True)
+_log_file = _log_dir / f"scraper_{datetime.now().strftime('%Y%m%d')}.log"
+
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(str(_log_file)),
+    ],
 )
 
 app = FastAPI(
@@ -31,6 +42,7 @@ app.add_middleware(
 # Include routers
 app.include_router(health.router, tags=["Health"])
 app.include_router(jobs.router, prefix="/jobs", tags=["Jobs"])
+app.include_router(features.router, prefix="/features", tags=["Features"])
 
 
 @app.on_event("startup")

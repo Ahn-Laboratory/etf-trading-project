@@ -1,60 +1,84 @@
 """
-TradingView Chart Data Scraper using Playwright with DB Upload (Container Version)
-==================================================================================
-기존 data-scraping/tradingview_playwright_scraper_upload.py 코드를 그대로 가져와서
-컨테이너 환경에 맞게 최소한의 수정만 적용한 버전.
+TradingView Chart Data Scraper using Playwright with DB Upload
+==============================================================
+baseline.ipynb의 찐찐 섹션 로직을 Playwright로 재구현하고
+CSV 다운로드 후 자동으로 DB에 업로드하는 기능을 추가한 스크래퍼
 
-변경사항:
-- 경로 설정 (다운로드, 쿠키, 로그)
-- DB 연결 방식 (SSH 터널 → host.docker.internal)
-- task_info.json 업데이트 추가
-- DB 로그 저장 추가 (scraping_logs 테이블)
+기능:
+- TradingView 로그인 (쿠키 기반)
+- 심볼 검색 및 선택
+- 시간 단위 변경
+- 차트 데이터 CSV 다운로드
+- **NEW: 원격 MySQL 데이터베이스로 자동 업로드**
+- **NEW: 배당금 및 주식 분할 데이터 수집 (yfinance)**
+
+주의사항:
+- 첫 로그인 시 CAPTCHA 수동 해결 필요
+- 로그인 후 쿠키를 저장하여 재사용 권장
+- yfinance 모듈이 없으면 배당금/분할 데이터는 건너뜀
+
+환경변수 (.env):
+- TRADINGVIEW_USERNAME: TradingView 사용자명
+- TRADINGVIEW_PASSWORD: TradingView 비밀번호
+- UPLOAD_TO_DB: DB 업로드 활성화 여부 (기본값: true)
+- USE_EXISTING_TUNNEL: 기존 SSH 터널 사용 여부 (기본값: true)
+- HEADLESS: Headless 모드 실행 여부 (기본값: false, 쿠키 있으면 자동 true)
+- FETCH_CORPORATE_ACTIONS: 배당금/분할 데이터 수집 여부 (기본값: true)
 """
 
 import asyncio
 import json
+import os
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
+import pandas as pd
 
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 
-from app.config import settings
-from app.services.db_service import DatabaseService
-from app.services.db_log_handler import write_log, SyncDBLogHandler
-from app.models.task_info import task_info_manager, JobStatus, SymbolStatus, TimeframeStatus
+# Add app/services to sys.path for yfinance_service import
+import sys
+_SERVICES_DIR = str(Path(__file__).resolve().parent.parent / "app" / "services")
+if _SERVICES_DIR not in sys.path:
+    sys.path.insert(0, _SERVICES_DIR)
 
+try:
+    from db_service_host import DatabaseService
+
+    DB_SERVICE_AVAILABLE = True
+except ImportError:
+    DB_SERVICE_AVAILABLE = False
+    print("db_service_host not available. Install sqlalchemy, pymysql, sshtunnel, pandas.")
+
+try:
+    from yfinance_service import YFinanceCorporateActionsService
+
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    print("yfinance_service not available. Install yfinance.")
+
+# .env 파일 로드
+load_dotenv()
+
+# 로깅 설정 (날짜 기반 로그 파일)
+_LOG_DIR = Path(__file__).parent.parent / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+_LOG_FILE = _LOG_DIR / f"scraper_{datetime.now().strftime('%Y%m%d')}.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(str(_LOG_FILE)),
+    ],
+)
 logger = logging.getLogger(__name__)
 
-# DB 로깅용 전역 변수
-_log_engine = None
-_log_job_id: Optional[str] = None
-_sync_handler: Optional[SyncDBLogHandler] = None
-
-
-def _db_log(level: str, message: str, symbol: str = None, timeframe: str = None, **extra):
-    """Direct synchronous DB log write."""
-    write_log(_log_engine, _log_job_id or "unknown", level, message, symbol, timeframe, extra or None)
-
-
-def _attach_db_handler(engine, job_id: str):
-    """Attach SyncDBLogHandler to root logger to capture ALL log messages."""
-    global _sync_handler
-    _detach_db_handler()
-    _sync_handler = SyncDBLogHandler(engine, job_id)
-    _sync_handler.setFormatter(logging.Formatter("%(message)s"))
-    logging.getLogger().addHandler(_sync_handler)
-
-
-def _detach_db_handler():
-    """Remove SyncDBLogHandler from root logger."""
-    global _sync_handler
-    if _sync_handler:
-        logging.getLogger().removeHandler(_sync_handler)
-        _sync_handler = None
-
-# 설정 (기존 코드와 동일)
+# 설정
 TIME_PERIODS = [
     {"name": "12달", "button_text": "1Y", "interval": "1 날"},
     {"name": "1달", "button_text": "1M", "interval": "30 분"},
@@ -63,6 +87,7 @@ TIME_PERIODS = [
 ]
 
 # 종목 리스트 (etf2_db 테이블 기준 - 101개 종목)
+# S&P 500 상위 시가총액 종목 + 주요 기술/금융/헬스케어 종목
 STOCK_LIST = [
     # Technology (30개)
     "AAPL", "MSFT", "NVDA", "GOOGL", "GOOG", "META", "AVGO", "ADBE",
@@ -91,51 +116,36 @@ STOCK_LIST = [
     "WELL", "APH", "ACN",
 ]
 
-# 거래소 매핑 (NYSE 종목만 명시, 나머지는 NASDAQ)
-NYSE_SYMBOLS = {
-    # Financials
-    "BRK.B", "JPM", "V", "MA", "BAC", "WFC", "GS", "MS", "BLK",
-    "SCHW", "AXP", "C", "SPGI", "COF", "BX", "ANET",
-    # Healthcare
-    "UNH", "JNJ", "LLY", "ABBV", "MRK", "TMO", "ABT",
-    "DHR", "GILD", "BSX", "SYK", "PFE",
-    # Industrials
-    "CAT", "GE", "HON", "UNP", "BA", "RTX", "LMT", "DE",
-    "ETN", "PLD", "MDT", "MMM",
-    # Energy
-    "XOM", "CVX", "COP",
-    # Consumer Staples
-    "PG", "PM", "LIN",
-    # Consumer
-    "HD", "MCD", "LOW", "TJX", "KO",
-    # Communication/Utilities
-    "T", "VZ", "DIS", "NEE",
-    # Others
-    "IBM", "ORCL", "CRM", "NOW", "ACN", "PGR", "APH", "WELL", "GEV"
-}
-
-def get_exchange_prefix(symbol: str) -> str:
-    """종목의 거래소 접두사 반환"""
-    if symbol in NYSE_SYMBOLS:
-        return f"NYSE:{symbol}"
-    return f"NASDAQ:{symbol}"
-
-# 컨테이너 환경 경로
-DOWNLOAD_DIR = Path(settings.download_dir)
-COOKIES_FILE = Path(settings.cookies_file)
+DOWNLOAD_DIR = Path("./downloads")
+COOKIES_FILE = Path("./cookies.json")
 
 
 class TradingViewScraper:
-    """TradingView 차트 데이터 스크래퍼 (기존 코드와 동일한 로직)"""
+    """TradingView 차트 데이터 스크래퍼"""
 
-    def __init__(self, headless: bool = True, job_id: str = None):
+    def __init__(
+        self,
+        headless: bool = False,
+        upload_to_db: bool = True,
+        use_existing_tunnel: bool = True,
+    ):
         self.headless = headless
-        self.job_id = job_id
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.playwright = None
+
+        self.upload_to_db = upload_to_db and DB_SERVICE_AVAILABLE
+        self.use_existing_tunnel = use_existing_tunnel
         self.db_service: Optional[DatabaseService] = None
+        self.yf_service: Optional[YFinanceCorporateActionsService] = None
+        self.fetch_corporate_actions = os.getenv("FETCH_CORPORATE_ACTIONS", "true").lower() == "true"
+
+        if self.upload_to_db:
+            logger.info("Database upload enabled")
+
+        if self.fetch_corporate_actions and YFINANCE_AVAILABLE:
+            logger.info("Corporate actions fetching enabled")
 
     async def __aenter__(self):
         await self.start()
@@ -157,7 +167,7 @@ class TradingViewScraper:
         )
 
         # 다운로드 디렉토리 생성
-        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        DOWNLOAD_DIR.mkdir(exist_ok=True)
 
         # 브라우저 컨텍스트 생성
         self.context = await self.browser.new_context(
@@ -175,14 +185,26 @@ class TradingViewScraper:
 
         self.page = await self.context.new_page()
 
-        # DB 연결
-        try:
-            self.db_service = DatabaseService()
-            self.db_service.connect()
-            logger.info("Database service connected")
-        except Exception as e:
-            logger.error(f"Failed to connect to database: {e}")
-            self.db_service = None
+        if self.upload_to_db:
+            try:
+                self.db_service = DatabaseService(
+                    use_existing_tunnel=self.use_existing_tunnel
+                )
+                self.db_service.connect()
+                logger.info("Database service connected")
+            except Exception as e:
+                logger.error(f"Failed to connect to database: {e}")
+                self.db_service = None
+                self.upload_to_db = False
+
+        if self.fetch_corporate_actions and YFINANCE_AVAILABLE:
+            try:
+                self.yf_service = YFinanceCorporateActionsService()
+                logger.info("YFinance service initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize YFinance service: {e}")
+                self.yf_service = None
+                self.fetch_corporate_actions = False
 
     async def close(self):
         """브라우저 종료"""
@@ -205,6 +227,90 @@ class TradingViewScraper:
                 json.dump(cookies, f)
             logger.info(f"쿠키 저장됨: {len(cookies)}개")
 
+    def check_cookie_expiry(self) -> bool:
+        """
+        쿠키 만료 여부 확인
+
+        Returns:
+            True if cookies are valid, False if expired or missing
+        """
+        if not COOKIES_FILE.exists():
+            return False
+
+        try:
+            with open(COOKIES_FILE, "r") as f:
+                cookies = json.load(f)
+
+            # 현재 시간 (Unix timestamp)
+            current_time = datetime.now().timestamp()
+
+            # 모든 쿠키 중 하나라도 만료되었는지 확인
+            for cookie in cookies:
+                # 'expires' 필드가 있는 경우만 체크
+                if "expires" in cookie:
+                    # expires는 Unix timestamp (초 단위)
+                    if cookie["expires"] < current_time:
+                        logger.warning(
+                            f"쿠키 만료됨: {cookie.get('name', 'unknown')}"
+                        )
+                        return False
+
+            logger.info("쿠키가 유효합니다.")
+            return True
+
+        except Exception as e:
+            logger.error(f"쿠키 확인 중 오류 발생: {e}")
+            return False
+
+    async def login(self, username: str, password: str) -> bool:
+        """
+        TradingView 로그인
+
+        참고: CAPTCHA가 나타나면 수동으로 해결해야 합니다.
+        """
+        logger.info("로그인 페이지로 이동...")
+        await self.page.goto("https://kr.tradingview.com/accounts/signin/")
+
+        # domcontentloaded만 대기 (networkidle은 TradingView에서 타임아웃 발생)
+        await self.page.wait_for_load_state("domcontentloaded")
+        await asyncio.sleep(2)  # 추가 로딩 대기
+
+        # 이메일 로그인 버튼 클릭
+        try:
+            await self.page.click('button:has-text("이메일")', timeout=5000)
+            await asyncio.sleep(0.5)
+        except:
+            logger.info("이미 로그인 폼이 표시됨")
+
+        # 아이디/비밀번호 입력
+        await self.page.fill(
+            'input[name="id_username"], input[placeholder*="유저네임"]', username
+        )
+        await self.page.fill(
+            'input[name="id_password"], input[type="password"]', password
+        )
+
+        # 로그인 버튼 클릭
+        await self.page.click('button:has-text("로그인")')
+
+        # CAPTCHA 대기 (수동 해결 필요)
+        logger.info("CAPTCHA가 나타나면 수동으로 해결해주세요...")
+        logger.info("로그인 완료 대기 중... (최대 120초)")
+
+        try:
+            # 로그인 성공 시 차트 페이지로 이동하거나 홈으로 리다이렉트됨
+            await self.page.wait_for_url(
+                lambda url: "chart" in url
+                or ("tradingview.com" in url and "signin" not in url),
+                timeout=120000,
+            )
+            logger.info("로그인 성공!")
+            await self.save_cookies()
+            return True
+        except Exception as e:
+            logger.error(f"로그인 실패 또는 타임아웃: {e}")
+            return False
+
     async def navigate_to_chart(self):
         """차트 페이지로 이동"""
         logger.info("차트 페이지로 이동 중...")
@@ -224,73 +330,9 @@ class TradingViewScraper:
 
         await asyncio.sleep(3)  # 추가 로딩 대기
 
-        # 팝업/오버레이 닫기
-        await self.dismiss_overlays()
-
-    async def dismiss_overlays(self):
-        """TradingView 팝업, 오버레이, 다이얼로그를 모두 닫기"""
-        try:
-            # 1. overlap-manager-root 내부의 닫기 버튼 클릭
-            close_btns = self.page.locator(
-                '#overlap-manager-root button[aria-label="닫기"], '
-                '#overlap-manager-root button[aria-label="Close"], '
-                '#overlap-manager-root [class*="close"], '
-                '#overlap-manager-root [data-name="close"]'
-            )
-            count = await close_btns.count()
-            for i in range(count):
-                try:
-                    await close_btns.nth(i).click(timeout=1000)
-                    logger.info(f"오버레이 닫기 버튼 클릭 ({i+1}/{count})")
-                    await asyncio.sleep(0.5)
-                except:
-                    pass
-
-            # 2. 쿠키 동의 배너 닫기
-            cookie_btns = self.page.locator(
-                'button:has-text("동의"), '
-                'button:has-text("Accept"), '
-                'button:has-text("OK"), '
-                '[class*="cookie"] button'
-            )
-            count = await cookie_btns.count()
-            for i in range(count):
-                try:
-                    await cookie_btns.nth(i).click(timeout=1000)
-                    logger.info("쿠키 동의 버튼 클릭")
-                    await asyncio.sleep(0.5)
-                except:
-                    pass
-
-            # 3. ESC 키로 나머지 다이얼로그 닫기
-            await self.page.keyboard.press("Escape")
-            await asyncio.sleep(0.3)
-            await self.page.keyboard.press("Escape")
-            await asyncio.sleep(0.3)
-
-            # 4. JS로 overlay-manager-root 내부 컨테이너 직접 제거
-            removed = await self.page.evaluate("""
-                () => {
-                    const root = document.getElementById('overlap-manager-root');
-                    if (!root) return 0;
-                    const containers = root.querySelectorAll(':scope > div');
-                    let count = 0;
-                    containers.forEach(el => {
-                        el.style.display = 'none';
-                        count++;
-                    });
-                    return count;
-                }
-            """)
-            if removed > 0:
-                logger.info(f"오버레이 {removed}개 숨김 처리")
-
-        except Exception as e:
-            logger.debug(f"오버레이 닫기 중 오류 (무시): {e}")
-
     async def search_and_select_symbol(self, symbol: str) -> bool:
         """
-        심볼 검색 및 선택 (거래소 접두사 사용)
+        심볼 검색 및 선택
 
         Args:
             symbol: 검색할 심볼 (예: "NVDA", "AAPL")
@@ -298,14 +340,9 @@ class TradingViewScraper:
         Returns:
             성공 여부
         """
-        # 거래소 접두사 포함 심볼 (예: "NYSE:BA", "NASDAQ:AAPL")
-        search_symbol = get_exchange_prefix(symbol)
-        logger.info(f"심볼 검색: {search_symbol}")
+        logger.info(f"심볼 검색: {symbol}")
 
         try:
-            # 오버레이가 다시 나타났을 수 있으므로 먼저 닫기
-            await self.dismiss_overlays()
-
             # 상단 툴바의 심볼 검색 버튼 클릭 (고정 ID 사용)
             symbol_btn = self.page.locator("#header-toolbar-symbol-search")
             await symbol_btn.click(timeout=5000)
@@ -320,17 +357,19 @@ class TradingViewScraper:
                 .first
             )
 
-            # 기존 텍스트 지우고 새로 입력 (거래소 접두사 포함)
+            # 기존 텍스트 지우고 새로 입력
             await search_input.clear()
-            await search_input.fill(search_symbol, timeout=10000)
+            await search_input.fill(symbol, timeout=10000)
             await asyncio.sleep(1.5)  # 검색 결과 대기
 
             # 검색 결과에서 해당 심볼 클릭
+            # TradingView 검색 결과는 텍스트 기반으로 검색
             clicked = False
 
             # 방법 1: NASDAQ 거래소 주식 결과 클릭 (가장 일반적인 미국 주식)
             try:
                 logger.info("방법 1: 첫번째 아이템 클릭")
+                # "심볼 찾기" 다이얼로그 내에서 NASDAQ + stock 조합 찾기
                 nasdaq_result = (
                     self.page.locator('[data-role="list-item"]').first
                 )
@@ -359,6 +398,7 @@ class TradingViewScraper:
             if not clicked:
                 try:
                     logger.info("방법 3: 첫 번째 검색 결과")
+                    # dialog 내의 첫 번째 검색 결과 항목
                     first_result = self.page.locator(
                         f'div:has(> div:has-text("{symbol}")):has-text("stock")'
                     ).first
@@ -379,26 +419,14 @@ class TradingViewScraper:
 
         except Exception as e:
             logger.error(f"심볼 검색 실패: {e}")
-            await self.capture_screenshot(f"symbol_search_fail_{symbol}")
             # ESC로 다이얼로그 닫기
             await self.page.keyboard.press("Escape")
             await asyncio.sleep(0.5)
             return False
 
-    async def capture_screenshot(self, name: str):
-        """실패 시 디버깅용 스크린샷 캡처"""
-        try:
-            screenshot_dir = DOWNLOAD_DIR / "screenshots"
-            screenshot_dir.mkdir(parents=True, exist_ok=True)
-            path = screenshot_dir / f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-            await self.page.screenshot(path=str(path), full_page=True)
-            logger.info(f"스크린샷 저장: {path}")
-        except Exception as e:
-            logger.debug(f"스크린샷 실패: {e}")
-
     async def change_time_period(self, button_text: str) -> bool:
         """
-        시간 단위 변경 (기존 코드와 동일)
+        시간 단위 변경
 
         Args:
             button_text: 버튼 텍스트 (예: "1Y", "1M", "5D", "1D")
@@ -408,11 +436,9 @@ class TradingViewScraper:
         """
         logger.info(f"시간 단위 변경: {button_text}")
 
-        # 오버레이 먼저 닫기
-        await self.dismiss_overlays()
-
         try:
             # 하단 툴바의 기간 버튼 클릭
+            # 버튼 이름이 "1 날 인터벌 의 1 년₩" 형식으로 되어있음
             period_button = self.page.locator(f'button:has-text("{button_text}")').first
             await period_button.click(timeout=5000)
 
@@ -430,29 +456,96 @@ class TradingViewScraper:
                 logger.info(f"시간 단위 변경 완료 (대체방법): {button_text}")
                 return True
             except:
-                logger.error(f"시간 단위 변경 최종 실패: {button_text}")
-                await self.capture_screenshot(f"time_period_fail_{button_text}")
+                logger.error(f"시간 단위 변경 최종 실패: {e}")
                 return False
 
     def _get_timeframe_code(self, period_name: str) -> str:
         """
         Convert Korean period name to database timeframe code.
+
+        Args:
+            period_name: Korean period name (e.g., "12개월", "1일")
+
+        Returns:
+            Timeframe code for database (e.g., "D", "1h")
         """
         timeframe_map = {
-            "12달": "D",
-            "12개월": "D",
-            "1달": "D",
-            "1개월": "D",
-            "1주": "D",
-            "1일": "1h",
+            "12달": "D",  # Daily for 12-month data
+            "12개월": "D",  # Daily for 12-month data
+            "1달": "D",  # Daily for 1-month data
+            "1개월": "D",  # Daily for 1-month data
+            "1주": "D",  # Daily for 1-week data
+            "1일": "1h",  # Hourly for 1-day data
         }
         return timeframe_map.get(period_name, "D")
+
+    async def fetch_and_upload_corporate_actions(self, symbol: str) -> dict:
+        """
+        Fetch and upload corporate actions (dividends and splits) for a symbol.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            Results dictionary with dividends and splits counts
+        """
+        results = {
+            "dividends": {"count": 0, "uploaded": 0},
+            "splits": {"count": 0, "uploaded": 0}
+        }
+
+        if not self.yf_service:
+            logger.info(f"YFinance service not available, skipping corporate actions for {symbol}")
+            return results
+
+        try:
+            logger.info(f"Fetching corporate actions for {symbol}...")
+            actions = self.yf_service.fetch_corporate_actions(symbol)
+
+            dividends_df = actions.get("dividends", pd.DataFrame())
+            splits_df = actions.get("splits", pd.DataFrame())
+
+            # yfinance_service now outputs correct column names (ex_date, amount, split_ratio)
+            if not dividends_df.empty:
+                results["dividends"]["count"] = len(dividends_df)
+            else:
+                logger.info(f"No dividends found for {symbol}")
+
+            # Prepare splits for upload
+            if not splits_df.empty:
+                results["splits"]["count"] = len(splits_df)
+            else:
+                logger.info(f"No splits found for {symbol}")
+
+            # Upload to database if available
+            if self.db_service and (not dividends_df.empty or not splits_df.empty):
+                try:
+                    upload_results = self.db_service.upload_corporate_actions(
+                        dividends_df=dividends_df,
+                        splits_df=splits_df,
+                        symbol=symbol
+                    )
+                    results["dividends"]["uploaded"] = upload_results.get("dividends", 0)
+                    results["splits"]["uploaded"] = upload_results.get("splits", 0)
+                    logger.info(
+                        f"  [{symbol}] ✓ Corporate actions uploaded: "
+                        f"{results['dividends']['uploaded']} dividends, "
+                        f"{results['splits']['uploaded']} splits"
+                    )
+                except Exception as e:
+                    logger.error(f"  [{symbol}] ✗ Corporate actions upload failed: {e}")
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch corporate actions for {symbol}: {e}")
+            logger.warning(f"Continuing with OHLCV data processing...")
+
+        return results
 
     async def export_chart_data(
         self, output_filename: Optional[str] = None
     ) -> Optional[Path]:
         """
-        차트 데이터를 CSV로 다운로드 (기존 코드와 동일)
+        차트 데이터를 CSV로 다운로드
 
         Args:
             output_filename: 출력 파일명 (없으면 자동 생성)
@@ -509,14 +602,13 @@ class TradingViewScraper:
 
         except Exception as e:
             logger.error(f"다운로드 실패: {e}")
-            await self.capture_screenshot(f"download_fail")
             # ESC로 다이얼로그 닫기
             await self.page.keyboard.press("Escape")
             return None
 
     async def process_single_stock(self, symbol: str, max_retries: int = 3) -> dict:
         """
-        단일 종목에 대해 모든 시간대 데이터 수집 (기존 코드와 동일한 로직)
+        단일 종목에 대해 모든 시간대 데이터 수집 (재시도 로직 포함)
 
         Args:
             symbol: 종목 심볼
@@ -537,12 +629,6 @@ class TradingViewScraper:
                     await asyncio.sleep(2)
                 else:
                     logger.error(f"심볼 선택 최종 실패: {symbol}")
-                    # 모든 timeframe을 실패로 표시
-                    for period in TIME_PERIODS:
-                        await task_info_manager.update_timeframe_status(
-                            symbol, period["name"], TimeframeStatus.FAILED,
-                            error="심볼 선택 실패"
-                        )
                     return results
 
         # 각 시간대별로 데이터 수집
@@ -551,12 +637,6 @@ class TradingViewScraper:
             button_text = period["button_text"]
 
             logger.info(f"\n[{symbol}] {period_name} 데이터 수집 중...")
-            _db_log("INFO", f"{period_name} 데이터 수집 중...", symbol=symbol, timeframe=period_name)
-
-            # timeframe 상태를 downloading으로 업데이트
-            await task_info_manager.update_timeframe_status(
-                symbol, period_name, TimeframeStatus.DOWNLOADING
-            )
 
             # 시간 단위 변경 (재시도)
             time_change_success = False
@@ -571,10 +651,6 @@ class TradingViewScraper:
 
             if not time_change_success:
                 logger.error(f"시간 단위 변경 최종 실패: {button_text}")
-                await task_info_manager.update_timeframe_status(
-                    symbol, period_name, TimeframeStatus.FAILED,
-                    error=f"시간 단위 변경 최종 실패: {button_text}"
-                )
                 continue
 
             await asyncio.sleep(1)
@@ -596,10 +672,9 @@ class TradingViewScraper:
                         await asyncio.sleep(2)
 
             if file_path:
-                results[period_name] = file_path
+                results[period_name] = str(file_path)
 
-                # DB 업로드
-                if self.db_service:
+                if self.upload_to_db and self.db_service:
                     try:
                         rows = self.db_service.upload_csv(
                             file_path, symbol, timeframe_code
@@ -607,42 +682,30 @@ class TradingViewScraper:
                         logger.info(
                             f"  [{symbol} - {period_name}] ✓ Uploaded {rows} rows to DB"
                         )
-                        _db_log("INFO", f"Uploaded {rows} rows to DB", symbol=symbol, timeframe=period_name, rows=rows)
-                        # 성공 상태 업데이트
-                        await task_info_manager.update_timeframe_status(
-                            symbol, period_name, TimeframeStatus.SUCCESS, rows=rows
-                        )
                     except Exception as e:
                         logger.error(
                             f"  [{symbol} - {period_name}] ✗ DB upload failed: {e}"
                         )
-                        _db_log("ERROR", f"DB upload failed: {e}", symbol=symbol, timeframe=period_name)
-                        await task_info_manager.update_timeframe_status(
-                            symbol, period_name, TimeframeStatus.FAILED,
-                            error=f"DB upload failed: {e}"
-                        )
-                else:
-                    # DB 서비스 없어도 다운로드 성공으로 처리
-                    await task_info_manager.update_timeframe_status(
-                        symbol, period_name, TimeframeStatus.SUCCESS, rows=0
-                    )
             else:
                 logger.error(f"다운로드 최종 실패: {symbol} - {period_name}")
-                _db_log("ERROR", "다운로드 최종 실패", symbol=symbol, timeframe=period_name)
-                await task_info_manager.update_timeframe_status(
-                    symbol, period_name, TimeframeStatus.FAILED,
-                    error="다운로드 최종 실패"
-                )
+
+        # Fetch and upload corporate actions (dividends and splits)
+        if self.fetch_corporate_actions:
+            try:
+                ca_results = await self.fetch_and_upload_corporate_actions(symbol)
+                # Add corporate actions results to the results dict
+                results["corporate_actions"] = ca_results
+            except Exception as e:
+                logger.warning(f"Failed to fetch corporate actions for {symbol}: {e}")
 
         return results
 
-    async def process_all_stocks(self, stock_list: List[str] = None, is_retry: bool = False) -> dict:
+    async def process_all_stocks(self, stock_list: list = None) -> dict:
         """
-        모든 종목에 대해 데이터 수집 (기존 코드와 동일한 로직 + task_info 업데이트)
+        모든 종목에 대해 데이터 수집
 
         Args:
             stock_list: 종목 리스트 (없으면 기본 STOCK_LIST 사용)
-            is_retry: retry 모드인지 여부
 
         Returns:
             결과 딕셔너리 {symbol: {period_name: file_path}}
@@ -651,76 +714,107 @@ class TradingViewScraper:
             stock_list = STOCK_LIST
 
         all_results = {}
-        retry_id = None
 
-        if is_retry:
-            # retry 모드: 기존 상태 유지하면서 특정 심볼만 재처리
-            retry_id = await task_info_manager.start_retry_task(stock_list)
-            logger.info(f"Retry task started: {retry_id}")
-        else:
-            # full 모드: 새로운 job 초기화
-            job_id = f"scrape_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            await task_info_manager.initialize_job(job_id, stock_list)
-            await task_info_manager.update_job_status(JobStatus.RUNNING)
-
-            # Setup DB logging with job_id
-            global _log_engine, _log_job_id
-            if self.db_service and self.db_service.engine:
-                _log_engine = self.db_service.engine
-                _log_job_id = job_id
-                _attach_db_handler(self.db_service.engine, job_id)
-
-        # 차트 페이지로 이동 (한 번만!)
+        # 차트 페이지로 이동
         await self.navigate_to_chart()
 
         for i, symbol in enumerate(stock_list):
             logger.info(f"\n{'=' * 50}")
             logger.info(f"[{i + 1}/{len(stock_list)}] {symbol} 처리 중...")
             logger.info("=" * 50)
-            _db_log("INFO", f"[{i + 1}/{len(stock_list)}] {symbol} 처리 시작", symbol=symbol)
-
-            # task_info 업데이트
-            await task_info_manager.update_symbol_status(symbol, SymbolStatus.DOWNLOADING)
-            await task_info_manager.set_current_symbol(symbol)
 
             results = await self.process_single_stock(symbol)
             all_results[symbol] = results
 
-            # 심볼 상태는 _recalculate_symbol_status에서 자동으로 계산됨
-
             # Rate limiting
             await asyncio.sleep(2)
-
-        # job 완료
-        job_info = await task_info_manager.get_job_info()
-        completed = sum(1 for s in job_info.symbols.values() if s.status == SymbolStatus.COMPLETED)
-        total = len(stock_list)
-
-        if is_retry and retry_id:
-            # retry 모드: retry task 완료 처리
-            if completed == total:
-                await task_info_manager.complete_retry_task(retry_id, JobStatus.COMPLETED)
-            elif completed > 0:
-                await task_info_manager.complete_retry_task(retry_id, JobStatus.PARTIAL)
-            else:
-                await task_info_manager.complete_retry_task(retry_id, JobStatus.FAILED)
-        else:
-            # full 모드
-            if completed == len(job_info.symbols):
-                await task_info_manager.update_job_status(JobStatus.COMPLETED)
-            elif completed > 0:
-                await task_info_manager.update_job_status(JobStatus.PARTIAL)
-            else:
-                await task_info_manager.update_job_status(JobStatus.FAILED)
-
-        logger.info(f"\n{'=' * 50}")
-        logger.info(f"Job 완료: {completed}/{total} 성공")
-        logger.info("=" * 50)
-        _db_log("INFO", f"Job 완료: {completed}/{total} 성공", completed=completed, total=total)
-        _detach_db_handler()
 
         return all_results
 
 
-# Global instance for API use
-scraper = TradingViewScraper(headless=settings.headless)
+async def main():
+    """메인 실행 함수"""
+    # 환경변수에서 로그인 정보 가져오기
+    username = os.getenv("TRADINGVIEW_USERNAME")
+    password = os.getenv("TRADINGVIEW_PASSWORD")
+
+    upload_to_db = os.getenv("UPLOAD_TO_DB", "true").lower() == "true"
+    use_existing_tunnel = os.getenv("USE_EXISTING_TUNNEL", "true").lower() == "true"
+
+    # HEADLESS 환경변수 읽기 (기본값: false)
+    headless = os.getenv("HEADLESS", "false").lower() == "true"
+
+    # 쿠키 존재 및 만료 여부 확인
+    cookie_valid = False
+    if COOKIES_FILE.exists():
+        # 임시 스크래퍼 인스턴스로 쿠키 만료 체크
+        temp_scraper = TradingViewScraper(
+            headless=False, upload_to_db=False, use_existing_tunnel=False
+        )
+        cookie_valid = temp_scraper.check_cookie_expiry()
+
+    # 쿠키가 없거나 만료된 경우 headless 모드 비활성화
+    if headless and not cookie_valid:
+        if not COOKIES_FILE.exists():
+            logger.warning("쿠키 파일이 없습니다. headless 모드를 비활성화합니다.")
+        else:
+            logger.warning("쿠키가 만료되었습니다. headless 모드를 비활성화합니다.")
+        logger.warning("로그인 시 CAPTCHA 수동 해결이 필요하므로 브라우저 창을 띄웁니다.")
+        headless = False
+
+    # 쿠키가 유효하면 자동으로 headless 모드 활성화 (환경변수가 명시적으로 false가 아닌 경우)
+    if cookie_valid and os.getenv("HEADLESS") is None:
+        logger.info("쿠키 파일이 유효합니다. headless 모드를 자동으로 활성화합니다.")
+        headless = True
+
+    if not username or not password:
+        logger.warning("환경변수가 설정되지 않았습니다.")
+        logger.warning(".env 파일에 다음 내용을 추가하세요:")
+        logger.warning("  TRADINGVIEW_USERNAME=your_username")
+        logger.warning("  TRADINGVIEW_PASSWORD=your_password")
+        return
+
+    # 테스트용: 단일 종목만 처리
+    # test_symbols = ["NVDA", "AAPL"]
+    # 전체 리스트 사용
+    test_symbols = STOCK_LIST
+
+    logger.info(f"Headless 모드: {headless}")
+    logger.info(f"DB 업로드: {upload_to_db}")
+    logger.info(f"기존 SSH 터널 사용: {use_existing_tunnel}")
+
+    async with TradingViewScraper(
+        headless=headless,
+        upload_to_db=upload_to_db,
+        use_existing_tunnel=use_existing_tunnel,
+    ) as scraper:
+        # 쿠키가 없으면 로그인
+        if not COOKIES_FILE.exists():
+            logger.info("로그인이 필요합니다.")
+            if not await scraper.login(username, password):
+                logger.error("로그인 실패. 프로그램을 종료합니다.")
+                return
+
+        # 차트 페이지로 이동
+        await scraper.navigate_to_chart()
+
+        # 로그인 상태 확인을 위해 잠시 대기
+        await asyncio.sleep(2)
+
+        # 종목 처리
+        for symbol in test_symbols:
+            logger.info(f"\n{'=' * 50}")
+            logger.info(f"{symbol} 데이터 수집 시작")
+            logger.info("=" * 50)
+
+            results = await scraper.process_single_stock(symbol)
+
+            logger.info(f"\n{symbol} 결과:")
+            for period, path in results.items():
+                logger.info(f"  - {period}: {path}")
+
+        logger.info("\n모든 작업 완료!")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

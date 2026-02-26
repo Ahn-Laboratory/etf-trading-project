@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
 """
-Database Service for TradingView Data Upload (Container Version)
+Database Service for TradingView Data Upload
 
-기존 data-scraping/db_service.py 코드를 그대로 가져와서
-컨테이너 환경에 맞게 최소한의 수정만 적용한 버전.
-
-변경사항:
-- SSH 터널 제거 (host.docker.internal 사용)
-- volume NULL 값 처리 추가
+Handles SSH tunnel connection and data upload to remote MySQL database.
+Uses the SSH tunneling approach described in .claude/skills/db-ssh-tunneling/skill.md
 """
 
 import os
 import logging
-import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import (
+    create_engine,
+    text,
+    MetaData,
+    Table,
+    Column,
+    DateTime,
+    Float,
+    BigInteger,
+)
 from sqlalchemy.orm import sessionmaker
+from sshtunnel import SSHTunnelForwarder
 
 logger = logging.getLogger(__name__)
 
@@ -30,43 +35,113 @@ class DatabaseService:
 
     def __init__(
         self,
-        db_url: Optional[str] = None,
+        ssh_host: str = "ahnbi2.suwon.ac.kr",
+        ssh_user: str = "ahnbi2",
+        ssh_key_path: Optional[str] = None,
+        remote_bind_port: int = 5100,
+        local_bind_port: int = 3306,
         db_user: str = "ahnbi2",
-        db_password: str = "bigdata",
-        db_host: str = "host.docker.internal",
-        db_port: int = 3306,
+        db_password: Optional[str] = None,
         db_name: str = "etf2_db",
+        use_existing_tunnel: bool = True,
     ):
         """
         Initialize database service.
 
         Args:
-            db_url: Full database URL (overrides other params if provided)
+            ssh_host: SSH server hostname
+            ssh_user: SSH username
+            ssh_key_path: Path to SSH private key (default: ~/.ssh/id_rsa)
+            remote_bind_port: MySQL port on remote server
+            local_bind_port: Local port for SSH tunnel
             db_user: MySQL username
-            db_password: MySQL password
-            db_host: MySQL host (default: host.docker.internal for container)
-            db_port: MySQL port
+            db_password: MySQL password (reads from DB_PASSWORD env var if not provided)
             db_name: MySQL database name
+            use_existing_tunnel: If True, use existing SSH tunnel on local port
         """
-        # Use environment variable or construct URL
-        self.db_url = db_url or os.getenv(
-            "DB_URL",
-            f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-        )
+        self.ssh_host = ssh_host
+        self.ssh_user = ssh_user
+        self.ssh_key_path = ssh_key_path or os.path.expanduser("~/.ssh/id_rsa")
+        self.remote_bind_port = remote_bind_port
+        self.local_bind_port = local_bind_port
+        self.db_user = db_user
+        self.db_password = db_password or os.getenv("DB_PASSWORD", "bigdata")
         self.db_name = db_name
+        self.use_existing_tunnel = use_existing_tunnel
+
+        self.tunnel: Optional[SSHTunnelForwarder] = None
         self.engine = None
         self.Session = None
 
-    def connect(self):
-        """Establish connection to database"""
+    def _check_existing_tunnel(self) -> bool:
+        """Check if SSH tunnel is already running on local port"""
+        import socket
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            logger.info(f"Connecting to database...")
+            sock.connect(("127.0.0.1", self.local_bind_port))
+            sock.close()
+            return True
+        except (socket.error, ConnectionRefusedError):
+            return False
+
+    def _validate_table_name_component(self, value: str) -> str:
+        """
+        Validate and sanitize table name component (symbol or timeframe).
+
+        Ensures the input contains only alphanumeric characters and underscores
+        to prevent SQL injection.
+
+        Args:
+            value: Symbol or timeframe string
+
+        Returns:
+            Sanitized string
+
+        Raises:
+            ValueError: If value contains invalid characters
+        """
+        import re
+
+        if not value:
+            raise ValueError("Table name component cannot be empty")
+
+        # Remove any whitespace
+        value = value.strip()
+
+        # Check for valid characters (alphanumeric, underscore, dot for symbols like BRK.B)
+        if not re.match(r'^[A-Za-z0-9_.]+$', value):
+            raise ValueError(
+                f"Invalid table name component '{value}': "
+                "must contain only alphanumeric characters, underscores, or dots"
+            )
+
+        return value
+
+    def connect(self):
+        """Establish connection to remote database"""
+        try:
+            if self.use_existing_tunnel and self._check_existing_tunnel():
+                # Use existing SSH tunnel
+                logger.info(f"Using existing SSH tunnel on port {self.local_bind_port}")
+                db_url = f"mysql+pymysql://{self.db_user}:{self.db_password}@127.0.0.1:{self.local_bind_port}/{self.db_name}"
+            else:
+                # Create new SSH tunnel
+                logger.info("Creating new SSH tunnel...")
+                self.tunnel = SSHTunnelForwarder(
+                    (self.ssh_host, 22),
+                    ssh_username=self.ssh_user,
+                    ssh_pkey=self.ssh_key_path,
+                    remote_bind_address=("127.0.0.1", self.remote_bind_port),
+                    local_bind_address=("127.0.0.1", 0),  # Random available port
+                )
+                self.tunnel.start()
+                local_port = self.tunnel.local_bind_port
+                logger.info(f"SSH tunnel established on port {local_port}")
+                db_url = f"mysql+pymysql://{self.db_user}:{self.db_password}@127.0.0.1:{local_port}/{self.db_name}"
 
             self.engine = create_engine(
-                self.db_url,
-                pool_pre_ping=True,
-                pool_recycle=3600,
-                echo=False
+                db_url, pool_pre_ping=True, pool_recycle=3600, echo=False
             )
             self.Session = sessionmaker(bind=self.engine)
 
@@ -82,11 +157,15 @@ class DatabaseService:
             raise
 
     def close(self):
-        """Close database connection"""
+        """Close database connection and SSH tunnel"""
         if self.engine:
             self.engine.dispose()
             self.engine = None
-            logger.info("Database connection closed")
+
+        if self.tunnel:
+            self.tunnel.stop()
+            self.tunnel = None
+            logger.info("SSH tunnel closed")
 
     @contextmanager
     def get_session(self):
@@ -112,20 +191,22 @@ class DatabaseService:
         Returns:
             Table name in format {symbol}_{timeframe}
         """
-        # Map common period names to DB conventions (기존 코드와 동일)
+        # Validate inputs to prevent SQL injection
+        validated_symbol = self._validate_table_name_component(symbol)
+        validated_timeframe = self._validate_table_name_component(timeframe)
+
+        # Map common period names to DB conventions
         timeframe_map = {
-            "12개월": "D",
-            "12달": "D",
-            "1개월": "D",
-            "1달": "D",
-            "1주": "D",
-            "1일": "1h",
-            "1시간": "10m",
-            "10분": "1m",
+            "12개월": "D",  # Daily for 12-month data
+            "1개월": "D",  # Daily for 1-month data
+            "1주": "D",  # Daily for 1-week data
+            "1일": "1h",  # Hourly for 1-day data
+            "1시간": "10m",  # 10-min for 1-hour view
+            "10분": "1m",  # 1-min for 10-minute view
         }
 
-        tf = timeframe_map.get(timeframe, timeframe)
-        return f"{symbol}_{tf}"
+        tf = timeframe_map.get(validated_timeframe, validated_timeframe)
+        return f"{validated_symbol}_{tf}"
 
     def table_exists(self, table_name: str) -> bool:
         """Check if table exists in database"""
@@ -144,7 +225,7 @@ class DatabaseService:
     def create_table_if_not_exists(self, table_name: str):
         """Create table for stock data if it doesn't exist"""
         if self.table_exists(table_name):
-            logger.debug(f"Table {table_name} already exists")
+            logger.info(f"Table {table_name} already exists")
             return
 
         create_sql = f"""
@@ -170,7 +251,7 @@ class DatabaseService:
 
     def parse_tradingview_csv(self, csv_path: Path) -> pd.DataFrame:
         """
-        Parse TradingView exported CSV file. (기존 코드와 동일)
+        Parse TradingView exported CSV file.
 
         Expected columns: time, open, high, low, close, volume
         Optional: Any indicator columns
@@ -186,7 +267,7 @@ class DatabaseService:
         # Standardize column names
         df.columns = df.columns.str.lower().str.strip()
 
-        # Parse time column
+        # Parse time column - TradingView uses ISO format when selected
         if "time" in df.columns:
             if pd.api.types.is_numeric_dtype(df["time"]):
                 df["time"] = pd.to_datetime(df["time"], unit="s")
@@ -210,6 +291,8 @@ class DatabaseService:
             df["volume"] = 0
 
         # Add RSI and MACD as null if not present
+        import numpy as np
+
         if "rsi" not in df.columns:
             df["rsi"] = np.nan
         if "macd" not in df.columns:
@@ -235,16 +318,16 @@ class DatabaseService:
         csv_path: Path,
         symbol: str,
         timeframe: str,
-        replace_existing: bool = True,
+        replace_existing: bool = False,
     ) -> int:
         """
-        Upload CSV data to database. (기존 코드 기반 + volume NULL 처리)
+        Upload CSV data to database.
 
         Args:
             csv_path: Path to CSV file
             symbol: Stock symbol
             timeframe: Time period
-            replace_existing: If True, replace existing data
+            replace_existing: If True, replace existing data; if False, append only new
 
         Returns:
             Number of rows inserted
@@ -265,9 +348,11 @@ class DatabaseService:
         # Upload data
         with self.engine.connect() as conn:
             if replace_existing:
+                # Get time range in CSV
                 min_time = df["time"].min()
                 max_time = df["time"].max()
 
+                # Delete existing data in range
                 delete_sql = text(f"""
                     DELETE FROM `{table_name}`
                     WHERE `time` >= :min_time AND `time` <= :max_time
@@ -279,15 +364,16 @@ class DatabaseService:
                 if deleted > 0:
                     logger.info(f"Deleted {deleted} existing rows in time range")
 
-            # Convert DataFrame to records
+            # Insert data using pandas to_sql with REPLACE
+            # Convert DataFrame to list of dicts for insert
+            # Replace NaN with None for MySQL compatibility
+            import numpy as np
+
             records = df.replace({np.nan: None}).to_dict("records")
 
             for record in records:
                 record["symbol"] = symbol
                 record["timeframe"] = timeframe
-                # volume 컬럼이 NULL을 허용하지 않는 기존 테이블 호환
-                if record["volume"] is None:
-                    record["volume"] = 0
 
             insert_sql = text(f"""
                 INSERT INTO `{table_name}` (`time`, `symbol`, `timeframe`, `open`, `high`, `low`, `close`, `volume`, `rsi`, `macd`)
@@ -309,7 +395,46 @@ class DatabaseService:
         logger.info(f"Uploaded {len(records)} rows to {table_name}")
         return len(records)
 
-    # --- Corporate Actions ---
+    def upload_csv_batch(
+        self, csv_dir: Path, file_pattern: str = "*.csv", replace_existing: bool = False
+    ) -> dict:
+        """
+        Upload multiple CSV files from directory.
+
+        Expects filenames in format: {symbol}_{timeframe}.csv or
+        pattern that can be parsed.
+
+        Args:
+            csv_dir: Directory containing CSV files
+            file_pattern: Glob pattern for CSV files
+            replace_existing: Whether to replace existing data
+
+        Returns:
+            Dict mapping filename to rows uploaded
+        """
+        results = {}
+        csv_files = list(Path(csv_dir).glob(file_pattern))
+
+        for csv_path in csv_files:
+            try:
+                # Parse filename to get symbol and timeframe
+                # Expected format: AAPL_D.csv or NVDA_1h.csv
+                name_parts = csv_path.stem.split("_")
+                if len(name_parts) >= 2:
+                    symbol = name_parts[0]
+                    timeframe = "_".join(name_parts[1:])  # Handle multi-part timeframes
+                else:
+                    logger.warning(f"Cannot parse filename: {csv_path.name}, skipping")
+                    continue
+
+                rows = self.upload_csv(csv_path, symbol, timeframe, replace_existing)
+                results[csv_path.name] = rows
+
+            except Exception as e:
+                logger.error(f"Failed to upload {csv_path.name}: {e}")
+                results[csv_path.name] = f"ERROR: {e}"
+
+        return results
 
     def create_corporate_actions_tables(self):
         """
@@ -357,8 +482,15 @@ class DatabaseService:
         """
         Upload dividend data to corporate_dividends table.
 
+        Expected DataFrame columns:
+        - ex_date: Ex-dividend date (required)
+        - amount: Dividend amount (required)
+        - declaration_date: Declaration date (optional)
+        - record_date: Record date (optional)
+        - payment_date: Payment date (optional)
+
         Args:
-            df: DataFrame with dividend data (ex_date, amount required)
+            df: DataFrame with dividend data
             symbol: Stock symbol
 
         Returns:
@@ -368,26 +500,36 @@ class DatabaseService:
             logger.warning(f"No dividend data to upload for {symbol}")
             return 0
 
+        # Ensure tables exist
         self.create_corporate_actions_tables()
 
+        # Standardize column names
         df = df.copy()
         df.columns = df.columns.str.lower().str.strip()
 
+        # Check required columns
         required_cols = ["ex_date", "amount"]
         for col in required_cols:
             if col not in df.columns:
                 raise ValueError(f"Missing required column in dividends DataFrame: {col}")
 
+        # Parse date columns
         for col in ["ex_date", "declaration_date", "record_date", "payment_date"]:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
 
+        # Convert amount to numeric
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+
+        # Drop rows with missing required data
         df = df.dropna(subset=required_cols)
 
         if df.empty:
             logger.warning(f"No valid dividend data after cleaning for {symbol}")
             return 0
+
+        # Upload data
+        import numpy as np
 
         records = df.replace({np.nan: None}).to_dict("records")
         for record in records:
@@ -419,8 +561,12 @@ class DatabaseService:
         """
         Upload split data to corporate_splits table.
 
+        Expected DataFrame columns:
+        - ex_date: Ex-split date (required)
+        - split_ratio: Split ratio (required, e.g., 2.0 for 2-for-1 split)
+
         Args:
-            df: DataFrame with split data (ex_date, split_ratio required)
+            df: DataFrame with split data
             symbol: Stock symbol
 
         Returns:
@@ -430,23 +576,34 @@ class DatabaseService:
             logger.warning(f"No split data to upload for {symbol}")
             return 0
 
+        # Ensure tables exist
         self.create_corporate_actions_tables()
 
+        # Standardize column names
         df = df.copy()
         df.columns = df.columns.str.lower().str.strip()
 
+        # Check required columns
         required_cols = ["ex_date", "split_ratio"]
         for col in required_cols:
             if col not in df.columns:
                 raise ValueError(f"Missing required column in splits DataFrame: {col}")
 
+        # Parse date column
         df["ex_date"] = pd.to_datetime(df["ex_date"], errors="coerce").dt.date
+
+        # Convert split_ratio to numeric
         df["split_ratio"] = pd.to_numeric(df["split_ratio"], errors="coerce")
+
+        # Drop rows with missing required data
         df = df.dropna(subset=required_cols)
 
         if df.empty:
             logger.warning(f"No valid split data after cleaning for {symbol}")
             return 0
+
+        # Upload data
+        import numpy as np
 
         records = df.replace({np.nan: None}).to_dict("records")
         for record in records:
@@ -477,6 +634,9 @@ class DatabaseService:
         """
         Upload both dividend and split data for a symbol.
 
+        Convenience method that ensures tables exist and uploads both types
+        of corporate action data.
+
         Args:
             dividends_df: DataFrame with dividend data (can be empty)
             splits_df: DataFrame with split data (can be empty)
@@ -487,8 +647,10 @@ class DatabaseService:
         """
         results = {"dividends": 0, "splits": 0}
 
+        # Ensure tables exist
         self.create_corporate_actions_tables()
 
+        # Upload dividends if provided
         if dividends_df is not None and not dividends_df.empty:
             try:
                 results["dividends"] = self.upload_dividends(dividends_df, symbol)
@@ -496,6 +658,7 @@ class DatabaseService:
                 logger.error(f"Failed to upload dividends for {symbol}: {e}")
                 results["dividends"] = -1
 
+        # Upload splits if provided
         if splits_df is not None and not splits_df.empty:
             try:
                 results["splits"] = self.upload_splits(splits_df, symbol)
@@ -505,3 +668,49 @@ class DatabaseService:
 
         logger.info(f"Corporate actions upload complete for {symbol}: {results}")
         return results
+
+
+# Utility function for standalone usage
+def upload_tradingview_data(
+    csv_path: str, symbol: str, timeframe: str, use_existing_tunnel: bool = True
+) -> int:
+    """
+    Convenience function to upload TradingView CSV data.
+
+    Args:
+        csv_path: Path to CSV file
+        symbol: Stock symbol
+        timeframe: Timeframe (e.g., D, 1h, 10m)
+        use_existing_tunnel: Whether to use existing SSH tunnel
+
+    Returns:
+        Number of rows uploaded
+    """
+    db = DatabaseService(use_existing_tunnel=use_existing_tunnel)
+    try:
+        db.connect()
+        rows = db.upload_csv(Path(csv_path), symbol, timeframe)
+        return rows
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    # Example usage
+    import sys
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+
+    if len(sys.argv) < 4:
+        print("Usage: python db_service.py <csv_path> <symbol> <timeframe>")
+        print("Example: python db_service.py ~/Downloads/AAPL_export.csv AAPL D")
+        sys.exit(1)
+
+    csv_path = sys.argv[1]
+    symbol = sys.argv[2]
+    timeframe = sys.argv[3]
+
+    rows = upload_tradingview_data(csv_path, symbol, timeframe)
+    print(f"Uploaded {rows} rows")

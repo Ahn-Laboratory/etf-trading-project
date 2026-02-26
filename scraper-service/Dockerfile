@@ -10,15 +10,23 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
     libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
     libasound2 libatspi2.0-0 \
+    fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Poetry
+RUN pip install --no-cache-dir poetry
+RUN poetry config virtualenvs.create false
+
+# Install dependencies
+COPY pyproject.toml poetry.lock* ./
+RUN poetry install --no-interaction --no-ansi --no-root --only main
 
 # Install Playwright browsers
 RUN playwright install chromium
 
 COPY app/ ./app/
+COPY scripts/ ./scripts/
+COPY tests/ ./tests/
 
 RUN mkdir -p /app/logs /app/downloads
 
