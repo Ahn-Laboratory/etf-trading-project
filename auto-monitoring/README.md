@@ -151,8 +151,8 @@ Returns prediction signals (currently dummy data).
 ## 🎯 Log File Integration
 
 The scraping status endpoint parses:
-- **Main log**: `/home/ahnbi2/etf-trading-project/data-scraping/tradingview_scraper_upload.log`
-- **Downloads**: `/home/ahnbi2/etf-trading-project/data-scraping/downloads/*.csv`
+- **Main log**: `/home/ahnbi2/etf-trading-project/scraper-service/tradingview_scraper_upload.log`
+- **Downloads**: `/home/ahnbi2/etf-trading-project/scraper-service/downloads/*.csv`
 
 Log format:
 ```

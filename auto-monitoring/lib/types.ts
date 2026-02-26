@@ -137,3 +137,23 @@ export interface ParsedLogEntry {
     error?: string;
   };
 }
+
+// Git worktree types
+export type GitWorktreeStatus = 'ok' | 'detached' | 'broken';
+
+export interface GitWorktree {
+  path: string;
+  branch?: string;  // undefined if detached
+  commit: string;   // full SHA
+  shortCommit: string; // 7-char SHA
+  detached: boolean;
+  bare: boolean;
+  headless: boolean;
+  status: GitWorktreeStatus;
+}
+
+export interface GitWorktreesResponse {
+  worktrees: GitWorktree[];
+  lastUpdated: string;
+  error?: string;
+}

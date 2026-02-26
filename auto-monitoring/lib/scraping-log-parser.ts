@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import path from 'path';
 import {
   ScrapingStatus,
   ScrapingSession,
@@ -198,9 +199,22 @@ export function parseLogLine(line: string): ParsedLogEntry | null {
 }
 
 // Get last N lines from log file (for efficiency)
+// Auto-detects the latest scraper_*.log file
 export async function getLastLogLines(n: number = 1000): Promise<string[]> {
   try {
-    const content = await fs.readFile(LOG_PATHS.SCRAPER_LOG, 'utf-8');
+    // Find the latest scraper log file
+    const files = await fs.readdir(LOG_PATHS.SCRAPER_LOG_DIR);
+    const logFiles = files
+      .filter(f => f.startsWith('scraper_') && f.endsWith('.log'))
+      .sort()
+      .reverse();
+
+    if (logFiles.length === 0) {
+      return [];
+    }
+
+    const latestLogFile = `${LOG_PATHS.SCRAPER_LOG_DIR}/${logFiles[0]}`;
+    const content = await fs.readFile(latestLogFile, 'utf-8');
     const lines = content.split('\n').filter(line => line.trim().length > 0);
     return lines.slice(-n);
   } catch (error) {

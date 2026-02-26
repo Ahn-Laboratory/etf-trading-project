@@ -260,11 +260,10 @@ function FilterButton({
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-        active
+      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${active
           ? 'bg-primary text-primary-foreground'
           : 'bg-muted hover:bg-muted/80 text-muted-foreground'
-      }`}
+        }`}
     >
       {label} <span className="font-semibold">({count})</span>
     </button>

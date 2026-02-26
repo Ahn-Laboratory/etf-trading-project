@@ -46,6 +46,8 @@ export const API_ENDPOINTS = {
   SCRAPING_STATUS: '/monitor/api/scraping/status',
   TRAINING_STATUS: '/monitor/api/training/status',
   PREDICTION_STATUS: '/monitor/api/prediction/status',
+  SCRAPER_LOGS: '/api/scraper/jobs/logs',  // Docker API endpoint (via nginx proxy)
+  SCRAPER_JOBS: '/api/scraper/jobs/jobs',  // Docker API endpoint (via nginx proxy)
 } as const;
 
 // Refresh intervals (ms)
@@ -56,10 +58,10 @@ export const REFRESH_INTERVALS = {
 } as const;
 
 // Log file paths (server-side only)
-// Docker에서는 /app/logs/scraper.log로 마운트됨
-// 환경변수 LOG_FILE_PATH가 있으면 사용, 없으면 기본값 사용
+// Docker에서는 /app/logs/로 마운트됨
+// 환경변수 LOG_DIR가 있으면 사용, 없으면 기본값 사용
 export const LOG_PATHS = {
-  SCRAPER_LOG: process.env.LOG_FILE_PATH || '/app/logs/scraper.log',
+  SCRAPER_LOG_DIR: process.env.LOG_DIR || '/app/logs',
   DOWNLOADS_DIR: '/app/downloads',
   PIPELINE_LOG_DIR: '/app/logs/pipeline',
 } as const;
