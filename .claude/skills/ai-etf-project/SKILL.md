@@ -56,7 +56,7 @@ AI 기반 미래 수익률 예측으로 패시브 ETF를 능가하는 Active ETF
 
 이 프로젝트의 기술 구현:
 - **ML 서비스**: `ml-service/` - FastAPI 기반 예측 API
-- **스크래핑**: `data-scraping/` - 1일,1주,1달,12달 주가 데이터 수집
+- **스크래핑**: `scraper-service/` - 1일,1주,1달,12달 주가 데이터 수집
 - **웹 상품소개/대시보드**: `web-dashboard/` - Next.js 상품소개 및 포트폴리오 시각화
 - **모델 실험**: `etf-model/` - 예측 모델 학습/평가
 - **자동화 모니터링**: `auto-monitoring/` - Next.js 자동화 진행여부 모니터링

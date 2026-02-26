@@ -26,7 +26,7 @@ TradingView에서 주가 데이터를 자동으로 수집하여 MySQL 데이터�
 ## 핵심 파일 구조
 
 ```
-data-scraping/
+scraper-service/
 ├── tradingview_playwright_scraper_upload.py  # 메인 스크래퍼 (최종 버전)
 ├── db_service.py                              # DB 연결 및 업로드 서비스
 ├── cookies.json                               # TradingView 로그인 쿠키
@@ -41,7 +41,7 @@ data-scraping/
 ### 1. 환경 설정
 
 ```bash
-cd /Users/jeong-uchang/etf-trading-project/data-scraping
+cd /Users/jeong-uchang/etf-trading-project/scraper-service
 
 # 의존성 설치
 poetry install
@@ -272,7 +272,7 @@ MySQL 데이터베이스의 모든 종목 테이블을 자동으로 검증하는
 
 **실행:**
 ```bash
-cd /home/ahnbi2/etf-trading-project/data-scraping
+cd /home/ahnbi2/etf-trading-project/scraper-service
 poetry run python ../scripts/validate_data.py
 ```
 
@@ -451,7 +451,7 @@ ssh -f -N -L 3306:127.0.0.1:5100 ahnbi2@ahnbi2.suwon.ac.kr
    ```
 4. 수동 실행으로 디버깅:
    ```bash
-   cd data-scraping && \
+   cd scraper-service && \
    xvfb-run --auto-servernum --server-args='-screen 0 1280x960x24' \
      poetry run python tradingview_playwright_scraper_upload.py
    ```

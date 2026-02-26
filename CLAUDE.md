@@ -3,6 +3,23 @@
 ## Project Overview
 ETF 주식 데이터 분석 및 예측을 위한 데이터 파이프라인 시스템. FastAPI 기반 ML 서비스가 Docker에서 실행되며, SSH 터널을 통해 원격 MySQL 데이터베이스에 접근합니다. Next.js 기반 웹 대시보드로 예측 결과와 포트폴리오를 시각화합니다.
 
+## (**중요**) 
+
+프로젝트에 대한 전반적인 개요는 ai-etf-project skill 을 사용해줘
+
+## 커스텀 검증 및 유지보수 스킬
+
+커스텀 검증 및 유지보수 스킬은 `.claude/skills/`에 정의되어 있습니다.
+
+| Skill | Purpose |
+|-------|---------|
+| `verify-implementation` | 프로젝트의 모든 verify 스킬을 순차 실행하여 통합 검증 보고서를 생성합니다 |
+| `manage-skills` | 세션 변경사항을 분석하고, 검증 스킬을 생성/업데이트하며, CLAUDE.md를 관리합니다 |
+| `verify-feature-layer` | Feature layer(Domain → API → Hooks) 구조 일관성을 검증합니다 |
+| `verify-e2e-tests` | E2E 테스트 패턴 일관성을 검증합니다 (helpers, page objects, hybrid 전략) |
+| `verify-ml-service` | ml-service의 AhnLab 모델 로딩, 랭킹 API, processed DB 연결, 스키마/모델 일관성을 검증합니다 |
+| `verify-scraper-service` | scraper-service의 DB 서비스, 피처 파이프라인, API 엔드포인트, 스크래퍼 구조를 검증합니다 |
+
 ## Architecture
 ```mermaid
 graph TD
@@ -127,13 +144,14 @@ Base URL: `http://localhost:8000`
 | GET | `/health` | 헬스체크 |
 | GET | `/api/stocks` | 종목 목록 조회 |
 | GET | `/api/stocks/{symbol}/history` | 종목 히스토리 조회 |
-| POST | `/api/predictions/batch` | 전체 종목 일괄 예측 |
+| POST | `/api/predictions/ranking` | 전체 종목 순위 예측 (주요 엔드포인트) |
+| POST | `/api/predictions/batch` | 일괄 예측 (ranking으로 위임) |
 | POST | `/api/predictions/{symbol}` | 단일 종목 예측 |
 | GET | `/api/predictions` | 저장된 예측 결과 조회 |
+| GET | `/api/predictions/ranking/latest` | 최신 랭킹 결과 조회 |
 
 ### 예측 API 주의사항
-- `/batch` 엔드포인트가 `/{symbol}` 보다 먼저 선언되어야 함 (경로 충돌 방지)
-- 잘못된 순서시 "BATCH_D table not found" 에러 발생
+- `/ranking`, `/batch` 엔드포인트가 `/{symbol}` 보다 먼저 선언되어야 함 (경로 충돌 방지)
 
 ## Auto-Monitoring Dashboard
 
@@ -149,7 +167,7 @@ Base URL: `http://ahnbi2.suwon.ac.kr/monitor`
 - 에러 목록
 
 ### 로그 파일 위치
-`data-scraping/tradingview_scraper_upload.log`
+`scraper-service/tradingview_scraper_upload.log`
 
 ## Web Dashboard
 
@@ -241,7 +259,7 @@ etf-trading-project/
 │   ├── app/              # Next.js 페이지
 │   ├── components/       # UI 컴포넌트
 │   └── lib/              # 로그 파서, 타입 정의
-├── data-scraping/         # TradingView 데이터 스크래퍼
+├── scraper-service/       # TradingView 데이터 스크래퍼 + FastAPI 서비스
 │   ├── tradingview_playwright_scraper_upload.py
 │   └── downloads/        # 다운로드된 CSV 파일
 ├── scripts/
@@ -264,10 +282,13 @@ export PATH="/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$PATH"
 export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 ```
 
-### 예측 모델 (MVP)
-- 단순 RSI/MACD 기반 규칙 모델
-- RSI < 30 → 매수 신호, RSI > 70 → 매도 신호
-- 향후 LSTM/Transformer 모델로 확장 예정
+### 예측 모델 (AhnLab LightGBM LambdaRank)
+- LightGBM LambdaRank 기반 전체 종목 상대 순위 랭킹 모델
+- 85개 피처 (기술지표 + 거시경제 + 엔지니어링 + Z-score + 랭크)
+- 2-fold rolling CV 앙상블 (fold 모델 평균)
+- 데이터 소스: etf2_db_processed (피처 전처리 완료된 DB)
+- 학습: `ml-service/scripts/train_ahnlab.py`
+- 모델 파일: `ml-service/data/models/ahnlab_lgbm/current/`
 
 ### 웹 대시보드 API 연동
 - `lib/api.ts`에서 FastAPI 엔드포인트 호출
