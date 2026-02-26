@@ -434,20 +434,32 @@ class ExperimentPipeline:
 
         # Create model via factory
         model_kwargs = {}
-        if self.device != "auto" and self.model_name in ["xgboost", "catboost"]:
+        # Pass device to GPU-capable models
+        if self.model_name in ["xgboost", "catboost", "ahnlab_lgbm"]:
             model_kwargs["device"] = self.device
 
         model = create_model(self.model_name, self.model_params, **model_kwargs)
 
         # Train
         train_start_time = time.time()
-        model.fit(
-            X_train,
-            y_train,
-            X_valid=X_valid,
-            y_valid=y_valid,
-            feature_names=self.selected_features,
-        )
+
+        # Special handling for AhnLab model which uses fit_with_panel()
+        if self.model_name == "ahnlab_lgbm" and hasattr(model, "fit_with_panel"):
+            if verbose:
+                print("Using fit_with_panel() for AhnLab model...")
+            model.fit_with_panel(
+                panel=panel,
+                pred_year=pred_year,
+                selected_features=self.selected_features,
+            )
+        else:
+            model.fit(
+                X_train,
+                y_train,
+                X_valid=X_valid,
+                y_valid=y_valid,
+                feature_names=self.selected_features,
+            )
         train_time = time.time() - train_start_time
 
         if verbose:

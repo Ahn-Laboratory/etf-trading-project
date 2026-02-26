@@ -285,6 +285,18 @@ def _register_all_models():
     except ImportError:
         pass
 
+    # AhnLab LGBM Ranking Model
+    try:
+        from .ahnlab_lgbm import AhnLabLGBMRankingModel
+        register_model(
+            name='ahnlab_lgbm',
+            model_class=AhnLabLGBMRankingModel,
+            default_params={},
+            description='AhnLab LGBM ranking model with pre-trained weights (rank 0.19231)'
+        )
+    except ImportError:
+        pass
+
 
 # Register models when module is imported
 _register_all_models()

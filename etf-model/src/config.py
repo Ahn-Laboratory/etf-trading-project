@@ -4,6 +4,7 @@ ETF Stock Prediction Competition - Configuration
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
+import os
 
 # Project Paths
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -154,12 +155,66 @@ class TabPFNConfig:
 
 
 @dataclass
+class AhnLabConfig:
+    """AhnLab LGBM LambdaRank configuration for ranking task"""
+    # API configuration
+    fred_api_key: str = field(default_factory=lambda: os.getenv("FRED_API_KEY", ""))
+
+    # Data provider
+    data_provider: str = "yfinance_fred"
+
+    # Training period
+    train_start: str = "2010-01-01"
+
+    # Target definition
+    target_horizon: int = 63  # 3 months ~ 63 trading days
+
+    # Model selection
+    top_k: int = 100  # Top-100 stocks to select
+
+    # Data quality
+    validation_days: int = 90
+    min_history_days: int = 126  # Minimum 6 months
+
+    # Feature engineering
+    relevance_bins: int = 50  # Binning for relevance features
+
+    # LightGBM LambdaRank parameters
+    num_boost_round: int = 5000
+    early_stopping_rounds: int = 150
+    n_folds: int = 2  # Cross-validation folds
+
+    lgb_params: Dict[str, Any] = field(default_factory=lambda: {
+        'objective': 'lambdarank',
+        'boosting_type': 'gbdt',
+        'metric': 'ndcg',
+        'ndcg_eval_at': [100],
+        'num_leaves': 127,
+        'max_depth': 8,
+        'learning_rate': 0.02,
+        'feature_fraction': 0.7,
+        'bagging_fraction': 0.7,
+        'bagging_freq': 3,
+        'min_child_samples': 50,
+        'min_child_weight': 0.001,
+        'reg_alpha': 0.3,
+        'reg_lambda': 0.3,
+        'max_bin': 255,
+        'min_gain_to_split': 0.01,
+        'verbose': -1,
+        'random_state': 42,
+        'n_jobs': -1,
+    })
+
+
+@dataclass
 class Config:
     """Main configuration class"""
     data: DataConfig = field(default_factory=DataConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     tabpfn: TabPFNConfig = field(default_factory=TabPFNConfig)
+    ahnlab: AhnLabConfig = field(default_factory=AhnLabConfig)
 
     # Random seed for reproducibility
     seed: int = 42

@@ -24,20 +24,21 @@ ETF 주식 예측 AI 경진대회 프로젝트. 2020~2024년 각 거래일에 �
 ## Build & Run Commands
 
 ```bash
-# 가상환경 활성화
-source .venv/bin/activate
+# Poetry 사용 (필수)
+poetry install              # 의존성 설치
+poetry shell                # 가상환경 활성화
 
-# 의존성 설치
-pip install -r requirements.txt
+# 또는 poetry run으로 직접 실행
+poetry run python -m src.pipeline
 
 # LightGBM 파이프라인 실행
-python -m src.pipeline
+poetry run python -m src.pipeline
 
 # TabPFN V2 실행 (권장)
-python -m src.tabpfn_pipeline_v2 --device cuda --features 150 --samples 10000 --chunk-size 500
+poetry run python -m src.tabpfn_pipeline_v2 --device cuda --features 150 --samples 10000 --chunk-size 500
 
 # 멀티 GPU 실행 (RTX 3090 x2)
-python -m src.tabpfn_pipeline_v2 --multi-gpu --gpu-ids 0 1 --features 150
+poetry run python -m src.tabpfn_pipeline_v2 --multi-gpu --gpu-ids 0 1 --features 150
 ```
 
 ### TabPFN V2 주요 옵션
@@ -133,3 +134,90 @@ cd /data2/project/2025summer/jwc0706/etf-trading-project/etf-model
 2) TabPFN V1 (날짜별 학습)은 규칙 위반 - V2 (연도별 학습) 사용
 3) 제출 파일명: `{model_name}_{hyper_param_info}/{year}.{model_name}.{timestamp}.submission.csv`
 4) panel 로딩 시간이 길기 때문에 실험 설계시 자원(데이터) 재활용을 고려하는 것이 필요함
+
+## AhnLab Feature Pipeline
+
+### 사용법
+```bash
+# 기존 방식 (pre-downloaded parquet)
+poetry run python run_experiment.py --model ahnlab_lgbm --year 2024
+
+# 새 방식 (FeaturePipeline으로 실시간 생성)
+poetry run python run_experiment.py --model ahnlab_lgbm --year 2024 --use-pipeline
+
+# GPU 가속 사용 (RTX 3090)
+poetry run python run_experiment.py --model ahnlab_lgbm --year 2024 --device gpu
+
+# CPU 강제 사용
+poetry run python run_experiment.py --model ahnlab_lgbm --year 2024 --device cpu
+```
+
+### GPU 지원
+| 모델 | GPU 지원 | 파라미터 |
+|------|----------|---------|
+| `ahnlab_lgbm` | ✅ | `--device gpu` (기본: auto) |
+| `xgboost` | ✅ | `--device cuda` |
+| `catboost` | ✅ | `--device cuda` |
+| `tabpfn` | ✅ | `--device cuda` |
+
+**참고**: `--device auto`는 GPU 가용 여부를 자동 감지합니다.
+
+### 데이터 소스 선택
+| Provider | 설명 | 사용법 |
+|----------|------|--------|
+| `yfinance` | Yahoo Finance API (기본값) | `--data-provider yfinance` |
+| `mysql` | TradingView 스크래핑 데이터 (etf2_db) | `--data-provider mysql` |
+
+```bash
+# YFinance 사용 (기본)
+poetry run python run_experiment.py --model ahnlab_lgbm --year 2024 --use-pipeline
+
+# MySQL 사용 (TradingView 스크래핑 데이터)
+poetry run python run_experiment.py --model ahnlab_lgbm --year 2024 --use-pipeline --data-provider mysql
+```
+
+**MySQL 환경변수** (`.env` 파일):
+```bash
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=ahnbi2
+MYSQL_PASSWORD=bigdata
+MYSQL_DB=etf2_db
+# 또는 전체 URL
+MYSQL_URL=mysql+pymysql://ahnbi2:bigdata@localhost:3306/etf2_db
+```
+
+### 파이프라인 구조
+```
+src/features/
+├── pipeline.py                 # 메인 오케스트레이터 (85개 피처 생성)
+├── ahnlab/
+│   ├── constants.py           # 피처 컬럼 정의, LGB 파라미터
+│   ├── technical.py           # pandas-ta 기술지표 (31개)
+│   ├── engineered.py          # 엔지니어링 피처 (24개)
+│   ├── cross_sectional.py     # Z-scores, Ranks (12개)
+│   ├── macro.py               # FRED API 거시경제 (10개)
+│   └── target.py              # 타겟 변수 생성
+└── data_providers/
+    ├── base.py                # 추상 데이터 제공자
+    ├── yfinance_provider.py   # YFinance 구현
+    └── mysql_provider.py      # MySQL 구현 (TradingView 스크래핑 데이터)
+```
+
+### 알려진 이슈 및 해결법
+
+#### 1. `KeyError: ['target_3m']` (해결됨)
+**원인**: 이전 버전의 FeaturePipeline이 타겟 변수를 생성하지 않음
+**해결**: 현재 버전은 `include_target=True`가 기본값이므로 자동 생성됨
+```python
+# 수동으로 타겟 추가가 필요한 경우
+panel['target_3m'] = panel.groupby('ticker')['close'].pct_change(63).shift(-63)
+```
+
+#### 2. `HTTP Error 404: Quote not found for symbol`
+**원인**: 상장폐지된 티커 (예: GORV)
+**해결**: 정상 동작 - 해당 티커만 제외하고 계속 진행됨
+
+#### 3. MACD/RSI 초기 NaN
+**원인**: MACD는 35일, RSI는 14일 이상의 데이터 필요
+**해결**: 정상 동작 - 학습 시 자동으로 제외됨
