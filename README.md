@@ -37,7 +37,7 @@ ETF 주식 데이터 수집, 분석, 예측을 위한 종합 데이터 파이프
 ### 1. 레포지토리 클론
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/2025-ahnlab/etf-trading-project.git
 cd etf-trading-project
 ```
 
@@ -119,8 +119,10 @@ docker compose ps           # 컨테이너 상태
 
 | Method | 엔드포인트 | 설명 |
 |--------|-----------|------|
-| POST | `/api/jobs/scrape` | 전체 종목 스크래핑 시작 |
+| POST | `/api/jobs/full` | 전체 종목 스크래핑 시작 |
+| POST | `/api/jobs/cancel` | 스크래핑 작업 취소 |
 | GET | `/api/jobs/status` | 스크래핑 상태 조회 |
+| POST | `/api/jobs/retry` | 실패한 종목 재시도 |
 
 ## 프로젝트 구조
 
@@ -235,6 +237,24 @@ ssh -f -N -L 3306:127.0.0.1:5100 ahnbi2@ahnbi2.suwon.ac.kr
 # 포트 사용 프로세스 확인
 lsof -ti:8000
 lsof -ti:3000
+```
+
+### 스크래핑 작업 제어
+
+```bash
+# 스크래핑 시작
+curl -X POST http://localhost:8001/api/jobs/full
+
+# 스크래핑 취소
+curl -X POST http://localhost:8001/api/jobs/cancel
+
+# 상태 확인
+curl http://localhost:8001/api/jobs/status
+
+# 실패한 종목 재시도
+curl -X POST http://localhost:8001/api/jobs/retry \
+  -H "Content-Type: application/json" \
+  -d '{"symbols": ["AAPL", "NVDA"]}'
 ```
 
 ## 문서

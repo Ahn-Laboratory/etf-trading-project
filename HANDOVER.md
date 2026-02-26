@@ -2,6 +2,8 @@
 
 ## 1. 프로젝트 개요
 
+**레포지토리**: https://github.com/2025-ahnlab/etf-trading-project
+
 ### 1.1 프로젝트 목적
 ETF 주식 데이터 수집, 분석, 예측을 위한 종합 데이터 파이프라인 시스템입니다. 머신러닝 모델을 활용한 주식 랭킹 예측과 자동화된 데이터 파이프라인을 제공합니다.
 
@@ -141,10 +143,11 @@ GET  /api/predictions/ranking/latest  # 최신 랭킹 결과
 
 **주요 엔드포인트**:
 ```
-POST /api/jobs/scrape          # 전체 종목 스크래핑
-POST /api/jobs/scrape/{symbol} # 단일 종목 스크래핑
+POST /api/jobs/full            # 전체 종목 스크래핑
+POST /api/jobs/cancel          # 스크래핑 작업 취소
 GET  /api/jobs/status          # 스크래핑 상태
-POST /api/jobs/process-features# 피처 처리
+POST /api/jobs/retry           # 실패한 종목 재시도
+GET  /api/jobs/logs            # 스크래핑 로그 조회
 ```
 
 **주요 파일**:
