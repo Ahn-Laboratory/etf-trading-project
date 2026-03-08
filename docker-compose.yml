@@ -83,6 +83,43 @@ services:
     networks:
       - etf-network
 
+  trading-service:
+    build:
+      context: ./trading-service
+      dockerfile: Dockerfile
+    container_name: etf-trading-service
+    ports:
+      - "8002:8002"
+    env_file:
+      - trading-service/.env
+    volumes:
+      - ./trading-service/data:/app/data
+    depends_on:
+      - ml-service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - etf-network
+
+  trading-monitor:
+    build:
+      context: ./trading-monitor
+      dockerfile: Dockerfile
+    container_name: etf-trading-monitor
+    ports:
+      - "3002:3002"
+    environment:
+      - TRADING_SERVICE_URL=http://trading-service:8002
+      - ML_SERVICE_URL=http://ml-service:8000
+      - SCRAPER_SERVICE_URL=http://scraper-service:8001
+    restart: unless-stopped
+    networks:
+      - etf-network
+
   nginx:
     image: nginx:alpine
     container_name: etf-nginx
