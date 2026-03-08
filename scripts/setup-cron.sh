@@ -1,7 +1,8 @@
 #!/bin/bash
 # cron 작업 설정 스크립트
 
-PROJECT_DIR="/home/ahnbi2/etf-trading-project"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "📅 Cron 작업 설정"
 echo "================="
