@@ -136,49 +136,49 @@ class KISClient:
         await self.get_access_token()
 
     async def get_balance(self) -> BalanceInfo:
-        """해외주식 잔고 조회"""
+        """해외주식 잔고 조회 (보유종목 + 매수가능금액)"""
         await self._ensure_token()
         await self._rate_limit()
 
-        tr_id = self._tr_ids["balance"]
         account_parts = settings.kis_account_number.split("-")
         if len(account_parts) != 2:
             logger.error(f"잘못된 계좌번호 형식: {settings.kis_account_number}")
             return BalanceInfo()
 
-        url = f"{self._base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
-        params = {
-            "CANO": account_parts[0],
-            "ACNT_PRDT_CD": account_parts[1],
-            "OVRS_EXCG_CD": settings.default_exchange_code,
-            "TR_CRCY_CD": "USD",
-            "CTX_AREA_FK200": "",
-            "CTX_AREA_NK200": "",
-        }
+        holdings = []
+        total_evaluation = 0.0
+        available_cash = 0.0
 
         try:
+            # 1. 보유종목 조회 (inquire-balance)
             async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.get(
-                    url, headers=self._get_headers(tr_id), params=params
+                    f"{self._base_url}/uapi/overseas-stock/v1/trading/inquire-balance",
+                    headers=self._get_headers(self._tr_ids["balance"]),
+                    params={
+                        "CANO": account_parts[0],
+                        "ACNT_PRDT_CD": account_parts[1],
+                        "OVRS_EXCG_CD": settings.default_exchange_code,
+                        "TR_CRCY_CD": "USD",
+                        "CTX_AREA_FK200": "",
+                        "CTX_AREA_NK200": "",
+                    },
                 )
                 resp.raise_for_status()
-                data = resp.json()
+                bal_data = resp.json()
 
-            if data.get("rt_cd") != "0":
-                logger.error(f"잔고 조회 실패: {data.get('msg1', 'Unknown error')}")
-                return BalanceInfo()
+            if bal_data.get("rt_cd") == "0":
+                output2 = bal_data.get("output2", {})
+                total_evaluation = (
+                    float(output2.get("tot_evlu_pfls_amt", 0))
+                    + float(output2.get("frcr_pchs_amt1", 0))
+                )
+                # ovrs_ord_psbl_amt가 있으면 사용
+                raw_cash = output2.get("ovrs_ord_psbl_amt")
+                if raw_cash is not None:
+                    available_cash = float(raw_cash)
 
-            output2 = data.get("output2", {})
-            # 해외주식 잔고 응답: output2에 요약, output1에 보유종목
-            tot_evlu = float(output2.get("tot_evlu_pfls_amt", 0))
-            frcr_pchs_amt = float(output2.get("frcr_pchs_amt1", 0))
-            available = float(output2.get("ovrs_ord_psbl_amt", 0))
-
-            return BalanceInfo(
-                total_evaluation=tot_evlu + frcr_pchs_amt,
-                available_cash=available,
-                currency="USD",
-                holdings=[
+                holdings = [
                     {
                         "code": item.get("ovrs_pdno", ""),
                         "name": item.get("ovrs_item_name", ""),
@@ -188,9 +188,41 @@ class KISClient:
                         "pnl_rate": float(item.get("evlu_pfls_rt", 0)),
                         "exchange_code": item.get("ovrs_excg_cd", ""),
                     }
-                    for item in data.get("output1", [])
+                    for item in bal_data.get("output1", [])
                     if float(item.get("ovrs_cblc_qty", 0)) > 0
-                ],
+                ]
+
+            # 2. 매수가능금액이 0이면 psamount API로 재조회
+            if available_cash <= 0:
+                await self._rate_limit()
+                tr_id_ps = "VTTS3007R" if self._mode == "paper" else "TTTS3007R"
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp2 = await client.get(
+                        f"{self._base_url}/uapi/overseas-stock/v1/trading/inquire-psamount",
+                        headers=self._get_headers(tr_id_ps),
+                        params={
+                            "CANO": account_parts[0],
+                            "ACNT_PRDT_CD": account_parts[1],
+                            "OVRS_EXCG_CD": "NASD",
+                            "OVRS_ORD_UNPR": "100",
+                            "ITEM_CD": "AAPL",
+                        },
+                    )
+                    resp2.raise_for_status()
+                    ps_data = resp2.json()
+
+                if ps_data.get("rt_cd") == "0":
+                    output = ps_data.get("output", {})
+                    available_cash = float(output.get("ovrs_ord_psbl_amt", 0))
+                    if total_evaluation <= 0:
+                        total_evaluation = available_cash
+                    logger.info(f"매수가능금액 조회: ${available_cash:,.2f}")
+
+            return BalanceInfo(
+                total_evaluation=total_evaluation,
+                available_cash=available_cash,
+                currency="USD",
+                holdings=holdings,
             )
         except httpx.HTTPError as e:
             logger.error(f"잔고 조회 HTTP 오류: {e}")
